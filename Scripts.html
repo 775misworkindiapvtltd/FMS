@@ -1,0 +1,150 @@
+<script>
+// ============================================
+// FMS - GLOBAL SCRIPTS (Shared across pages)
+// ============================================
+
+var FMS = {
+  sidebarOpen: false,
+  currentTheme: 'dark',
+  currentFontSize: 'medium'
+};
+
+// ===== SIDEBAR =====
+function toggleSidebar() {
+  if (FMS.sidebarOpen) closeSidebar(); else openSidebar();
+}
+
+function openSidebar() {
+  document.getElementById('sidebar').classList.add('open');
+  document.getElementById('sidebarOverlay').classList.add('active');
+  FMS.sidebarOpen = true;
+}
+
+function closeSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebarOverlay').classList.remove('active');
+  FMS.sidebarOpen = false;
+}
+
+// ===== THEME =====
+function toggleTheme() {
+  FMS.currentTheme = FMS.currentTheme === 'dark' ? 'light' : 'dark';
+  document.body.setAttribute('data-theme', FMS.currentTheme);
+  var icon = document.getElementById('themeIcon');
+  if (icon) icon.textContent = FMS.currentTheme === 'dark' ? 'light_mode' : 'dark_mode';
+}
+
+// ===== FONT SIZE =====
+function setFontSize(size) {
+  document.body.classList.remove('font-small', 'font-medium', 'font-large');
+  document.body.classList.add('font-' + size);
+  FMS.currentFontSize = size;
+  
+  var btns = document.querySelectorAll('.font-btn');
+  btns.forEach(function(b) { b.classList.remove('active'); });
+  var idx = size === 'small' ? 0 : (size === 'medium' ? 1 : 2);
+  if (btns[idx]) btns[idx].classList.add('active');
+}
+
+// ===== SIDEBAR NAVIGATION =====
+function renderSidebar(permissions) {
+  var nav = document.getElementById('sidebarNav');
+  var html = '';
+
+  for (var header in permissions) {
+    var items = permissions[header];
+    html += '<div class="nav-group">';
+    html += '<div class="nav-group-header" onclick="toggleGroup(this)">';
+    html += '<span class="header-text">' + escapeHtml(header) + '</span>';
+    html += '<span class="material-icons-round arrow">expand_more</span>';
+    html += '</div>';
+    html += '<div class="nav-group-items">';
+    for (var i = 0; i < items.length; i++) {
+      html += '<div class="nav-item" onclick="openPage(\'' + escapeAttr(items[i]) + '\', \'' + escapeAttr(header) + '\')">';
+      html += '<span class="material-icons-round">chevron_right</span>';
+      html += '<span>' + escapeHtml(items[i]) + '</span>';
+      html += '</div>';
+    }
+    html += '</div></div>';
+  }
+
+  if (!html) {
+    html = '<div style="padding:30px; text-align:center; color:var(--text-muted); font-size:12px;">No permissions assigned.</div>';
+  }
+
+  nav.innerHTML = html;
+}
+
+function toggleGroup(el) {
+  var group = el.parentElement;
+  // Close all other groups
+  var allGroups = document.querySelectorAll('.nav-group');
+  allGroups.forEach(function(g) {
+    if (g !== group) g.classList.remove('expanded');
+  });
+  group.classList.toggle('expanded');
+}
+
+function openPage(pageName, headerName) {
+  var main = document.getElementById('mainContent');
+  main.innerHTML = '<div class="content-page">' +
+    '<h3>' + escapeHtml(pageName) + '</h3>' +
+    '<p class="subtitle">Category: ' + escapeHtml(headerName) + '</p>' +
+    '<p style="color:var(--text-muted); font-style:italic;">This page content will be configured later.</p>' +
+    '</div>';
+  closeSidebar();
+  
+  // Mark active nav item
+  var items = document.querySelectorAll('.nav-item');
+  items.forEach(function(item) { item.classList.remove('active'); });
+  // Find and mark the clicked one
+  event.target.closest('.nav-item').classList.add('active');
+}
+
+// ===== LOAD PERMISSIONS =====
+function loadPermissions() {
+  if (typeof FMS_SESSION === 'undefined') return;
+  
+  google.script.run
+    .withSuccessHandler(function(res) {
+      if (res.success) {
+        renderSidebar(res.permissions);
+      } else {
+        document.getElementById('sidebarNav').innerHTML = 
+          '<div style="padding:20px; color:var(--danger); font-size:12px; text-align:center;">' + 
+          (res.message || 'No permissions found') + '</div>';
+      }
+    })
+    .withFailureHandler(function(err) {
+      document.getElementById('sidebarNav').innerHTML = 
+        '<div style="padding:20px; color:var(--danger); font-size:12px; text-align:center;">Error: ' + err.message + '</div>';
+    })
+    .getUserPermissions(FMS_SESSION.userName, FMS_SESSION.sheetUrl, FMS_SESSION.stepsSheet);
+}
+
+// ===== UTILITY =====
+function escapeHtml(str) {
+  var div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function escapeAttr(str) {
+  return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
+}
+
+// ===== EVENT LISTENERS =====
+document.addEventListener('click', function(e) {
+  if (FMS.sidebarOpen) {
+    var sidebar = document.getElementById('sidebar');
+    var menuBtn = document.querySelector('.icon-btn');
+    if (sidebar && !sidebar.contains(e.target) && menuBtn && !menuBtn.contains(e.target)) {
+      closeSidebar();
+    }
+  }
+});
+
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') closeSidebar();
+});
+</script>

@@ -17,9 +17,9 @@
       overflow: hidden;
     }
 
-    /* Animated Particles Background */
+    /* Animated Particles */
     .particles {
-      position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 0; overflow: hidden;
+      position: fixed; inset: 0; z-index: 0; overflow: hidden;
     }
     .particles span {
       position: absolute; display: block; background: rgba(255,255,255,0.04);
@@ -43,7 +43,7 @@
 
     /* Login Card */
     .login-card {
-      position: relative; z-index: 1; width: 440px; padding: 45px 40px;
+      position: relative; z-index: 1; width: 440px; padding: 42px 38px;
       background: rgba(255,255,255,0.04); backdrop-filter: blur(25px);
       border-radius: 24px; border: 1px solid rgba(255,255,255,0.08);
       box-shadow: 0 30px 60px rgba(0,0,0,0.4);
@@ -55,32 +55,32 @@
     }
 
     /* Header */
-    .login-header { text-align: center; margin-bottom: 30px; }
+    .login-header { text-align: center; margin-bottom: 28px; }
     .login-header .logo {
-      width: 60px; height: 60px; margin: 0 auto 15px;
+      width: 64px; height: 64px; margin: 0 auto 14px;
       background: linear-gradient(135deg, #667eea, #764ba2);
-      border-radius: 16px; display: flex; align-items: center; justify-content: center;
-      box-shadow: 0 8px 25px rgba(102,126,234,0.4);
+      border-radius: 18px; display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 10px 30px rgba(102,126,234,0.4);
     }
-    .login-header .logo .material-icons-round { font-size: 32px; color: #fff; }
+    .login-header .logo .material-icons-round { font-size: 34px; color: #fff; }
     .login-header h1 { font-size: 24px; font-weight: 700; color: #fff; }
     .login-header h1 span { background: linear-gradient(135deg, #667eea, #764ba2); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-    .login-header p { font-size: 12px; color: rgba(255,255,255,0.4); margin-top: 4px; letter-spacing: 2px; text-transform: uppercase; }
+    .login-header p { font-size: 11px; color: rgba(255,255,255,0.4); margin-top: 4px; letter-spacing: 2px; text-transform: uppercase; }
 
-    /* Config Section */
+    /* Config */
     .config-section {
-      background: rgba(255,255,255,0.03); border-radius: 14px; padding: 16px;
-      border: 1px solid rgba(255,255,255,0.05); margin-bottom: 22px;
+      background: rgba(255,255,255,0.03); border-radius: 14px; padding: 14px 16px;
+      border: 1px solid rgba(255,255,255,0.05); margin-bottom: 20px;
     }
-    .config-section .config-title {
+    .config-title {
       font-size: 10px; color: rgba(255,255,255,0.35); text-transform: uppercase;
       letter-spacing: 1.5px; margin-bottom: 10px; font-weight: 600;
     }
-    .config-row { margin-bottom: 10px; }
+    .config-row { margin-bottom: 8px; }
     .config-row:last-child { margin-bottom: 0; }
-    .config-row label { display: block; font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 4px; }
+    .config-row label { display: block; font-size: 10px; color: rgba(255,255,255,0.45); margin-bottom: 3px; }
     .config-row input {
-      width: 100%; padding: 10px 12px; background: rgba(255,255,255,0.04);
+      width: 100%; padding: 9px 12px; background: rgba(255,255,255,0.04);
       border: 1px solid rgba(255,255,255,0.08); border-radius: 8px;
       font-size: 12px; color: #fff; font-family: 'Poppins', sans-serif; outline: none;
       transition: border-color 0.3s;
@@ -88,16 +88,16 @@
     .config-row input:focus { border-color: #667eea; }
     .config-row input::placeholder { color: rgba(255,255,255,0.2); }
 
-    /* Input Fields */
-    .field { position: relative; margin-bottom: 20px; }
+    /* Fields */
+    .field { position: relative; margin-bottom: 18px; }
     .field .material-icons-round {
-      position: absolute; left: 16px; top: 50%; transform: translateY(-50%);
+      position: absolute; left: 15px; top: 50%; transform: translateY(-50%);
       color: rgba(255,255,255,0.3); font-size: 20px; transition: color 0.3s;
     }
     .field input {
-      width: 100%; padding: 16px 16px 16px 52px;
+      width: 100%; padding: 15px 15px 15px 50px;
       background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 14px; font-size: 15px; color: #fff;
+      border-radius: 14px; font-size: 14px; color: #fff;
       font-family: 'Poppins', sans-serif; outline: none; transition: 0.3s;
     }
     .field input:focus { border-color: #667eea; background: rgba(102,126,234,0.05); box-shadow: 0 0 25px rgba(102,126,234,0.1); }
@@ -106,9 +106,9 @@
 
     /* Button */
     .login-btn {
-      width: 100%; padding: 16px; border: none; border-radius: 14px;
+      width: 100%; padding: 15px; border: none; border-radius: 14px;
       background: linear-gradient(135deg, #667eea, #764ba2);
-      font-size: 15px; font-weight: 600; color: #fff; cursor: pointer;
+      font-size: 14px; font-weight: 600; color: #fff; cursor: pointer;
       font-family: 'Poppins', sans-serif; letter-spacing: 1px;
       transition: 0.3s; position: relative; overflow: hidden;
     }
@@ -116,18 +116,17 @@
     .login-btn:active { transform: translateY(0); }
     .login-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; box-shadow: none !important; }
 
-    /* Spinner */
-    .btn-spinner { display: none; width: 22px; height: 22px; border: 3px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; margin: 0 auto; }
+    .btn-spinner { display: none; width: 20px; height: 20px; border: 3px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; margin: 0 auto; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
     /* Message */
-    .msg { text-align: center; margin-top: 16px; padding: 12px; border-radius: 10px; font-size: 13px; font-weight: 500; display: none; animation: msgIn 0.3s ease; }
+    .msg { text-align: center; margin-top: 14px; padding: 11px; border-radius: 10px; font-size: 12px; font-weight: 500; display: none; animation: msgIn 0.3s ease; }
     @keyframes msgIn { from { opacity:0; transform:scale(0.9); } to { opacity:1; transform:scale(1); } }
     .msg.success { display: block; background: rgba(0,200,83,0.1); color: #00e676; border: 1px solid rgba(0,200,83,0.2); }
     .msg.error { display: block; background: rgba(233,69,96,0.1); color: #ff5252; border: 1px solid rgba(233,69,96,0.2); }
 
     @media (max-width:480px) {
-      .login-card { width: 92%; padding: 30px 24px; }
+      .login-card { width: 92%; padding: 28px 22px; }
       .login-header h1 { font-size: 20px; }
     }
   </style>
@@ -140,8 +139,8 @@
 
   <div class="login-card">
     <div class="login-header">
-      <div class="logo"><span class="material-icons-round">account_tree</span></div>
-      <h1>Welcome to <span>FMS</span></h1>
+      <div class="logo"><span class="material-icons-round">checkroom</span></div>
+      <h1>Welcome to <span>Fashion</span></h1>
       <p>Flow Management System</p>
     </div>
 
@@ -162,7 +161,7 @@
       </div>
     </div>
 
-    <!-- Login Fields -->
+    <!-- Login -->
     <div class="field">
       <span class="material-icons-round">person</span>
       <input type="text" id="loginId" placeholder="Login ID" autocomplete="off">
@@ -209,7 +208,6 @@
 
           if (res.success) {
             showMsg(res.message, 'success');
-            // Store session info
             var session = {
               userName: res.userName,
               loginId: res.loginId,
@@ -240,7 +238,6 @@
     function goToDashboard(session) {
       google.script.run
         .withSuccessHandler(function(html) {
-          // Inject session data into HTML before writing
           var sessionScript = '<script>var FMS_SESSION = ' + JSON.stringify(session) + ';<\/script>';
           html = html.replace('</head>', sessionScript + '</head>');
           document.open();
@@ -253,7 +250,6 @@
         .getDashboardHtml();
     }
 
-    // Enter key
     document.addEventListener('keydown', function(e) { if(e.key === 'Enter') doLogin(); });
   </script>
 </body>

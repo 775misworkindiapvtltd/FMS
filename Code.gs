@@ -2,6 +2,16 @@
 // FMS - FLOW MANAGEMENT SYSTEM
 // Google Apps Script - Server Side Code
 // ============================================
+// 
+// FILE STRUCTURE:
+// Code.gs          - Server-side logic (this file)
+// Login.html       - Login page
+// Dashboard.html   - Main dashboard after login
+// Styles.html      - Shared CSS styles (included via include())
+// Scripts.html     - Shared JS scripts (included via include())
+// TAT_Calculator.gs - TAT calculation functions
+//
+// ============================================
 
 function doGet() {
   return HtmlService.createTemplateFromFile('Login')
@@ -11,6 +21,10 @@ function doGet() {
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 
+/**
+ * Include external HTML files (for CSS/JS separation)
+ * Usage in HTML: <?!= include('Styles') ?>
+ */
 function include(filename) {
   return HtmlService.createHtmlOutputFromFile(filename).getContent();
 }
@@ -31,12 +45,14 @@ function validateLogin(loginId, password, sheetUrl, sheetName) {
     
     // Row 4 (index 3) has headers: LOGIN, PASSWORD, etc.
     // Data starts from row 5 (index 4)
-    // Col A = LOGIN (index 0), Col B = PASSWORD (index 1), Col C = Name/Permission Header (index 2)
+    // Col A (index 0) = LOGIN
+    // Col B (index 1) = PASSWORD
+    // Col C (index 2) = Name / Permission reference
     
     for (var i = 4; i < data.length; i++) {
       var sheetLogin = String(data[i][0]).trim();
       var sheetPassword = String(data[i][1]).trim();
-      var userName = sheetLogin; // User name is login name (Col A)
+      var userName = sheetLogin; // Using login name as display name
       
       if (sheetLogin === '' || sheetLogin === 'undefined') continue;
       
@@ -111,7 +127,7 @@ function getUserPermissions(userName, sheetUrl, stepsSheetName) {
 }
 
 // ============================================
-// GET DASHBOARD PAGE
+// GET DASHBOARD HTML (called after login success)
 // ============================================
 function getDashboardHtml() {
   return HtmlService.createTemplateFromFile('Dashboard').evaluate().getContent();
