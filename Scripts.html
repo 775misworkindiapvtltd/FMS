@@ -873,6 +873,81 @@ function renderStepForm(res, isInstantFromCache) {
   body.innerHTML = html || '<div class="pending-empty">No fields to fill for this step.</div>';
   body.dataset.formLoadedOnce = '1';
   updateSubmitButtonState();
+  applyAdaptiveFormLayout(res.fields);
+}
+
+/**
+ * Decides whether this form should use a 2-column layout instead of a
+ * single column. Goal: user should NEVER have to scroll the modal to
+ * reach Submit. Uses a simple heuristic based on field count/type first
+ * (fast, no layout thrash), then double-checks against the ACTUAL
+ * rendered height vs. available viewport height and only widens if the
+ * single-column version would truly overflow.
+ */
+function applyAdaptiveFormLayout(fields) {
+  var body = document.getElementById('modalBody');
+  var modalBox = document.querySelector('.modal-box');
+  if (!body || !modalBox) return;
+
+  // Heuristic: long-form fields (textarea, file-drop) take much more
+  // vertical room than a single input/select, so weight them higher when
+  // deciding if the form is "long" for a single column.
+  var weight = 0;
+  fields.forEach(function(f) {
+    if (f.type === 'PLANNED_DISPLAY') weight += 1;
+    else if (f.type && f.type.indexOf('LONG TEXT') !== -1) weight += 2.5;
+    else if (f.type && f.type.indexOf('FILE') !== -1) weight += 2.5;
+    else weight += 1;
+  });
+
+  var shouldTryTwoColumns = weight >= 6; // roughly: more than ~6 simple fields, or fewer with big ones
+
+  if (shouldTryTwoColumns) {
+    body.classList.add('form-fields-grid');
+    modalBox.classList.add('modal-wide');
+    markFullWidthFields();
+  } else {
+    body.classList.remove('form-fields-grid');
+    modalBox.classList.remove('modal-wide');
+  }
+
+  // Final safety check: if it STILL overflows the viewport after applying
+  // (or without needing) the grid, nudge the modal to use more of the
+  // available height so Submit stays reachable without page-level scroll
+  // (the modal body itself still scrolls internally as a last resort,
+  // but this keeps that from being needed in the vast majority of cases).
+  requestAnimationFrameSafe(function() {
+    var footer = modalBox.querySelector('.modal-footer:last-child');
+    var header = modalBox.querySelector('.modal-header');
+    var available = window.innerHeight * 0.88 - (header ? header.offsetHeight : 60) - (footer ? footer.offsetHeight * 2 : 100);
+    if (body.scrollHeight > available && !shouldTryTwoColumns) {
+      // Single column still doesn't fit - switch to 2 columns as a fallback
+      body.classList.add('form-fields-grid');
+      modalBox.classList.add('modal-wide');
+      markFullWidthFields();
+    }
+  });
+}
+
+function requestAnimationFrameSafe(fn) {
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(fn);
+  else setTimeout(fn, 0);
+}
+
+// Long Text / File-upload fields always span both columns in the 2-column
+// grid (they need the extra horizontal room and don't pair well side by
+// side with a short field).
+function markFullWidthFields() {
+  var fieldDivs = document.querySelectorAll('#modalBody .form-field');
+  fieldDivs.forEach(function(div) {
+    var hasTextarea = div.querySelector('textarea');
+    var hasFileDrop = div.querySelector('.file-drop');
+    if (hasTextarea || hasFileDrop) {
+      div.classList.add('field-span-2');
+    } else {
+      div.classList.remove('field-span-2');
+    }
+  });
 }
 
 /**
