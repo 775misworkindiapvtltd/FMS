@@ -25,6 +25,13 @@ var FMS_MASTER_SHEET = 'MASTER';
 var FMS_STEPS_SHEET = 'STEPS';
 var FMS_DROPDOWN_SHEET = 'DROPDPWN';
 
+// Google Drive folder where FILE-type question uploads are saved.
+// Leave as '' to auto-create/use a folder named "FMS Uploads" in the
+// script owner's My Drive (default behavior). To use a SPECIFIC folder
+// instead, paste its Folder ID here (the long string in its Drive URL:
+// https://drive.google.com/drive/folders/<THIS_PART_IS_THE_ID>).
+var FMS_DRIVE_FOLDER_ID = '';
+
 function doGet() {
   return HtmlService.createTemplateFromFile('Login')
     .evaluate()

@@ -360,6 +360,12 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
 }
 .file-drop:hover { border-color: var(--accent); color: var(--accent); }
 .file-drop input[type="file"] { display: none; }
+/* Once at least one file is uploaded for a required FILE question */
+.file-drop.file-drop-done { border-color: var(--success); color: var(--success); border-style: solid; }
+.file-required-hint {
+  margin-top: 6px; font-size: 10.5px; color: var(--warning); font-weight: 500;
+  display: flex; align-items: center; gap: 4px;
+}
 .file-list { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 .file-chip {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
@@ -375,6 +381,9 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
 .btn-primary { background: var(--accent-gradient); color: #fff; }
 .btn-primary:hover { box-shadow: 0 8px 20px var(--color-primary-glow-strong); }
 .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+/* Specifically disabled because a required file hasn't been uploaded yet
+   (vs. disabled because a save is already in progress) */
+.btn-primary.btn-disabled-upload { opacity: 0.4; cursor: not-allowed; }
 .btn-secondary { background: var(--bg-card); color: var(--text-secondary); border: 1px solid var(--border); }
 .btn-secondary:hover { background: var(--bg-card-hover); }
 

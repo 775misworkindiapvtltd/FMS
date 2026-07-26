@@ -726,6 +726,7 @@ function onPageChange(newPage) {
 
 // ===== WORKFLOW: POPUP FORM =====
 FMS.uploadedFiles = {}; // fieldName -> [{base64, fileName, mimeType}]
+FMS.requiredFileFields = {}; // fieldName -> true, for every FILE-type question in the CURRENT form
 FMS.currentFormRow = null;
 FMS.currentFormHeader = null;
 FMS.currentFormStep = null;
@@ -827,6 +828,10 @@ function renderStepForm(res, isInstantFromCache) {
     return;
   }
 
+  // Recomputed fresh on every render: which FILE-type fields this form has
+  // (their Submit-disable state is tracked live in handleFileSelect/removeFile).
+  FMS.requiredFileFields = {};
+
   var html = '';
   res.fields.forEach(function(field, idx) {
     var fid = 'field_' + idx;
@@ -851,12 +856,14 @@ function renderStepForm(res, isInstantFromCache) {
     } else if (field.type.indexOf('NUMBER') !== -1) {
       html += '<input type="number" id="' + fid + '">';
     } else if (field.type.indexOf('FILE') !== -1) {
-      html += '<div class="file-drop" onclick="document.getElementById(\'' + fid + '\').click()">' +
+      FMS.requiredFileFields[field.name] = true; // tracked so Submit stays disabled until uploaded
+      html += '<div class="file-drop" id="' + fid + '_drop" onclick="document.getElementById(\'' + fid + '\').click()">' +
         '<span class="material-icons-round" style="font-size:24px;display:block;margin-bottom:4px;">cloud_upload</span>' +
-        'Click to upload (multiple files allowed)' +
+        '<span class="file-drop-text">Click to upload (multiple files allowed)</span>' +
         '<input type="file" id="' + fid + '" multiple onchange="handleFileSelect(this, \'' + escapeAttr(field.name) + '\')">' +
         '</div>' +
-        '<div class="file-list" id="' + fid + '_list"></div>';
+        '<div class="file-list" id="' + fid + '_list"></div>' +
+        '<div class="file-required-hint" id="' + fid + '_hint">File upload required before you can submit</div>';
     } else {
       html += '<input type="text" id="' + fid + '">';
     }
@@ -865,18 +872,61 @@ function renderStepForm(res, isInstantFromCache) {
 
   body.innerHTML = html || '<div class="pending-empty">No fields to fill for this step.</div>';
   body.dataset.formLoadedOnce = '1';
+  updateSubmitButtonState();
+}
+
+/**
+ * If this Step's form has any FILE-type question, the Submit button stays
+ * disabled until EVERY required file field has at least one uploaded
+ * file. Steps with no file question are unaffected (button always enabled
+ * once the form is loaded).
+ */
+function updateSubmitButtonState() {
+  var submitBtn = document.getElementById('modalSubmitBtn');
+  if (!submitBtn) return;
+
+  var requiredNames = Object.keys(FMS.requiredFileFields || {});
+  var allUploaded = requiredNames.every(function(name) {
+    return FMS.uploadedFiles[name] && FMS.uploadedFiles[name].length > 0;
+  });
+
+  submitBtn.disabled = !allUploaded;
+  submitBtn.classList.toggle('btn-disabled-upload', !allUploaded);
+
+  // Show/hide the "File upload required" hint under each pending file field
+  requiredNames.forEach(function(name) {
+    var uploaded = FMS.uploadedFiles[name] && FMS.uploadedFiles[name].length > 0;
+    var fieldDiv = document.querySelector('.form-field[data-field-name="' + name.replace(/"/g, '\\"') + '"]');
+    if (!fieldDiv) return;
+    var hint = fieldDiv.querySelector('.file-required-hint');
+    var drop = fieldDiv.querySelector('.file-drop');
+    if (hint) hint.style.display = uploaded ? 'none' : 'block';
+    if (drop) drop.classList.toggle('file-drop-done', uploaded);
+  });
 }
 
 function handleFileSelect(input, fieldName) {
   var files = Array.prototype.slice.call(input.files);
   if (!FMS.uploadedFiles[fieldName]) FMS.uploadedFiles[fieldName] = [];
 
+  // Keep Submit disabled while files are still being read/encoded, even if
+  // this field already had a previous upload - only flip back to enabled
+  // once every selected file has finished reading (see the counter below).
+  updateSubmitButtonState();
+
+  var pendingReads = files.length;
   files.forEach(function(file) {
     var reader = new FileReader();
     reader.onload = function(e) {
       var base64 = e.target.result.split(',')[1];
       FMS.uploadedFiles[fieldName].push({ base64: base64, fileName: file.name, mimeType: file.type || 'application/octet-stream' });
       renderFileList(fieldName);
+      pendingReads--;
+      if (pendingReads === 0) updateSubmitButtonState();
+    };
+    reader.onerror = function() {
+      pendingReads--;
+      if (pendingReads === 0) updateSubmitButtonState();
     };
     reader.readAsDataURL(file);
   });
@@ -899,6 +949,7 @@ function removeFile(fieldName, index) {
   if (FMS.uploadedFiles[fieldName]) {
     FMS.uploadedFiles[fieldName].splice(index, 1);
     renderFileList(fieldName);
+    updateSubmitButtonState(); // re-disable Submit if this was the only file for a required field
   }
 }
 

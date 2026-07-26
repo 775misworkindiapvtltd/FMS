@@ -615,7 +615,17 @@ function uploadFileToDrive(base64Data, fileName, mimeType) {
   return file.getUrl();
 }
 
+/**
+ * Returns the Drive folder to save file-upload question answers into.
+ * If FMS_DRIVE_FOLDER_ID (top of Code.gs) is set to a specific Folder ID,
+ * that exact folder is used (throws a clear error if the ID is invalid/
+ * inaccessible, instead of silently falling back). Otherwise, auto-
+ * creates/reuses a folder named "FMS Uploads" in My Drive.
+ */
 function getOrCreateFMSFolder() {
+  if (typeof FMS_DRIVE_FOLDER_ID !== 'undefined' && FMS_DRIVE_FOLDER_ID) {
+    return DriveApp.getFolderById(FMS_DRIVE_FOLDER_ID);
+  }
   var folderName = 'FMS Uploads';
   var folders = DriveApp.getFoldersByName(folderName);
   if (folders.hasNext()) return folders.next();
