@@ -683,6 +683,12 @@ function renderDataTable(headerName, stepName) {
   var visibleIdx = [];
   t.columns.forEach(function(col, idx) { if (!t.hiddenCols[idx]) visibleIdx.push(idx); });
 
+  // A vertical divider line is drawn right BEFORE the "Planned" column -
+  // it visually separates the base/identifying columns (Timestamp, Item
+  // Name, etc.) from this Step's own workflow columns (Planned, Actual,
+  // and everything the user fills in). Explicitly requested by the user.
+  var plannedColIdx = t.columns.indexOf('Planned');
+
   var html = '';
 
   // ---- Breadcrumb title + Status filter tabs on the SAME row (saves a
@@ -732,7 +738,8 @@ function renderDataTable(headerName, stepName) {
     var arrow = t.sortCol === idx ? (t.sortDir === 'asc' ? ' ▲' : ' ▼') : '';
     var w = t.colWidths[idx] || DEFAULT_COL_WIDTH;
     var style = ' style="width:' + w + 'px; min-width:' + w + 'px; max-width:' + w + 'px;"';
-    html += '<th data-col="' + idx + '"' + style + '>' +
+    var dividerClass = (idx === plannedColIdx) ? ' col-before-planned' : '';
+    html += '<th data-col="' + idx + '" class="' + dividerClass.trim() + '"' + style + '>' +
       '<span class="th-label" onclick="onSortColumn(' + idx + ')">' + escapeHtml(t.columns[idx]) + arrow + '</span>' +
       '<span class="col-resize-handle" onmousedown="startColResize(event,' + idx + ')"></span>' +
       '</th>';
@@ -741,20 +748,21 @@ function renderDataTable(headerName, stepName) {
   html += '</tr><tr class="col-search-row">';
   html += '<th></th>';
   visibleIdx.forEach(function(idx) {
+    var dividerClass = (idx === plannedColIdx) ? ' col-before-planned' : '';
     if (isDateColumn(idx)) {
       // Any column holding a Date/Time value (Planned, Actual, Timestamp,
       // or any Row6 "DATE" type) gets the dual-calendar date-RANGE picker
       // in its search box instead of a plain text box.
       var range = t.colSearch[idx];
       var label = formatDateRangeLabel(range);
-      html += '<th><div class="date-search-wrap">' +
+      html += '<th class="' + dividerClass.trim() + '"><div class="date-search-wrap">' +
         '<button type="button" class="date-range-trigger" onclick="openDateRangePicker(event, ' + idx + ')">' +
         '<span class="material-icons-round">date_range</span><span class="date-range-trigger-label">' + escapeHtml(label || 'Any date') + '</span>' +
         '</button>' +
         (range ? '<span class="date-search-clear material-icons-round" onclick="onColumnSearch(' + idx + ', null)">close</span>' : '') +
         '</div></th>';
     } else {
-      html += '<th><input type="text" placeholder="Search..." value="' + escapeAttr(t.colSearch[idx] || '') + '" oninput="onColumnSearch(' + idx + ', this.value)"></th>';
+      html += '<th class="' + dividerClass.trim() + '"><input type="text" placeholder="Search..." value="' + escapeAttr(t.colSearch[idx] || '') + '" oninput="onColumnSearch(' + idx + ', this.value)"></th>';
     }
   });
   html += '<th></th>';
@@ -767,7 +775,8 @@ function renderDataTable(headerName, stepName) {
       html += '<tr class="' + (r.overdue ? 'row-overdue' : '') + '">';
       html += '<td class="col-serial">' + (startIdx + i + 1) + '</td>';
       visibleIdx.forEach(function(idx) {
-        html += '<td>' + renderCellValue(r.cells[idx]) + '</td>';
+        var dividerClass = (idx === plannedColIdx) ? ' col-before-planned' : '';
+        html += '<td class="' + dividerClass.trim() + '">' + renderCellValue(r.cells[idx]) + '</td>';
       });
       html += '<td class="col-action">';
       if (r.status === 'pending') {
