@@ -23,6 +23,44 @@ function startLiveClock() {
   FMS.clockTimer = setInterval(updateLiveClock, 1000);
 }
 
+/**
+ * Auto-shrinks the topbar's font/spacing (via 2 escalating CSS classes)
+ * whenever its content is about to overflow the available width - this
+ * lets the header stay on ONE line for as long as realistically
+ * possible, instead of wrapping to a 2nd row or forcing a horizontal
+ * scrollbar. Runs on load, window resize, and sidebar expand/collapse
+ * (since that changes how much width the topbar has).
+ *
+ * Strategy: start from the least-compact state, measure real overflow
+ * (scrollWidth > clientWidth), and escalate through 2 levels only if
+ * still overflowing at each step. Always tries to de-escalate back to
+ * normal first, so it recovers cleanly if the window grows again.
+ */
+function autoShrinkTopbar() {
+  var topbar = document.querySelector('.topbar');
+  if (!topbar) return;
+
+  topbar.classList.remove('topbar-compact', 'topbar-ultra-compact');
+
+  if (isTopbarOverflowing(topbar)) {
+    topbar.classList.add('topbar-compact');
+  }
+  if (isTopbarOverflowing(topbar)) {
+    topbar.classList.add('topbar-ultra-compact');
+  }
+}
+
+function isTopbarOverflowing(topbar) {
+  // A small 2px tolerance avoids flip-flopping right at the exact boundary
+  return topbar.scrollWidth > topbar.clientWidth + 2;
+}
+
+var topbarResizeDebounce = null;
+function scheduleTopbarAutoShrink() {
+  if (topbarResizeDebounce) clearTimeout(topbarResizeDebounce);
+  topbarResizeDebounce = setTimeout(autoShrinkTopbar, 80);
+}
+
 function updateLiveClock() {
   var el = document.getElementById('liveClock');
   if (!el) return;
@@ -174,12 +212,14 @@ function openSidebar() {
   document.getElementById('sidebar').classList.add('pinned');
   document.getElementById('sidebarOverlay').classList.add('active');
   FMS.sidebarOpen = true;
+  scheduleTopbarAutoShrink(); // sidebar pinned only affects width on mobile; harmless no-op otherwise
 }
 
 function closeSidebar() {
   document.getElementById('sidebar').classList.remove('pinned');
   document.getElementById('sidebarOverlay').classList.remove('active');
   FMS.sidebarOpen = false;
+  scheduleTopbarAutoShrink();
 }
 
 // ===== THEME =====

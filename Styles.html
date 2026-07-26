@@ -164,8 +164,26 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
    height, visually pushing/clipping things. The "Last Updated" line now
    lives on the Home page itself instead (see .home-last-updated). */
 .topbar-title-block { display: flex; align-items: center; }
-.topbar-title { font-size: 14px; font-weight: 700; color: var(--text-primary); white-space: nowrap; }
+.topbar-title { font-size: 14px; font-weight: 700; color: var(--text-primary); white-space: nowrap; transition: font-size 0.15s ease; }
 .topbar-title .brand-fms { color: var(--accent); }
+
+/* Auto-shrink step (applied by JS via autoShrinkTopbar() in Scripts.html
+   when the topbar's content is wider than the available space) - shrinks
+   the least-essential text/spacing first, so everything keeps fitting on
+   ONE line without ever needing to wrap or horizontally scroll, for as
+   long as realistically possible. */
+.topbar.topbar-compact { padding: 0 10px; }
+.topbar.topbar-compact .topbar-title { font-size: 12px; }
+.topbar.topbar-compact .topbar-left { gap: 8px; }
+.topbar.topbar-compact .topbar-right { gap: 5px; }
+.topbar.topbar-compact .user-avatar-role { display: none; }
+.topbar.topbar-compact .user-avatar-chip { padding: 3px 8px 3px 3px; }
+.topbar.topbar-compact .font-btn { padding: 3px 6px; font-size: 9.5px; }
+.topbar.topbar-compact .icon-btn { width: 28px; height: 28px; }
+.topbar.topbar-compact .icon-btn .material-icons-round { font-size: 16px; }
+.topbar.topbar-ultra-compact .topbar-clock { display: none; }
+.topbar.topbar-ultra-compact .user-avatar-name { font-size: 9.5px; }
+.topbar.topbar-ultra-compact .topbar-logo-box { width: 28px; height: 28px; }
 
 /* User avatar chip (initials circle + name/role text) - replaces the
    plain icon+name user-badge in the redesigned header. */
@@ -325,7 +343,7 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
    underneath it; the rail expands OVER this on hover (position:fixed),
    so no reflow/jump happens when hovering. */
 .main-content {
-  margin-top: var(--topbar-height); margin-left: var(--sidebar-collapsed); padding: 14px 18px;
+  margin-top: var(--topbar-height); margin-left: var(--sidebar-collapsed); padding: 6px 18px 14px;
   min-height: calc(100vh - var(--topbar-height));
   height: calc(100vh - var(--topbar-height));
   display: flex; flex-direction: column;
@@ -502,7 +520,7 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
   /* Never wrap to a second line on desktop - scroll horizontally instead
      if the window is too narrow to fit everything. */
   flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
-  padding-bottom: 8px;
+  padding-bottom: 6px;
 }
 .status-tabs-row::-webkit-scrollbar { display: none; }
 .table-page-title {
@@ -514,8 +532,11 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
 .breadcrumb-sep { color: var(--text-muted); }
 
 .status-tabs { display: flex; gap: 6px; flex-shrink: 0; white-space: nowrap; }
+/* Square (not pill/circle) tabs - per user request, uses the same
+   --radius-sm token as every other button in the app (icon-btn, page-btn,
+   btn-fill, etc.) instead of a fully-rounded pill shape. */
 .status-tab {
-  padding: 5px 12px; border-radius: 16px; border: 1px solid var(--border);
+  padding: 5px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border);
   background: var(--bg-card); color: var(--text-secondary); cursor: pointer;
   font-family: 'Poppins', sans-serif; font-size: calc(11.5px * var(--content-font-scale)); font-weight: 500; transition: var(--transition);
   display: flex; align-items: center; gap: 5px; flex-shrink: 0;
@@ -523,7 +544,7 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
 .status-tab:hover { border-color: var(--accent); color: var(--accent); }
 .status-tab.active { background: var(--accent-gradient); color: #fff; border-color: transparent; }
 .status-tab-count {
-  background: rgba(255,255,255,0.2); padding: 1px 6px; border-radius: 10px; font-size: calc(9.5px * var(--content-font-scale)); font-weight: 600;
+  background: rgba(255,255,255,0.2); padding: 1px 6px; border-radius: 4px; font-size: calc(9.5px * var(--content-font-scale)); font-weight: 600;
 }
 .status-tab:not(.active) .status-tab-count { background: var(--border); }
 

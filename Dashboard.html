@@ -113,6 +113,8 @@
       }
       startLiveClock();
       startAutoRefresh();
+      autoShrinkTopbar();
+      window.addEventListener('resize', scheduleTopbarAutoShrink);
     };
   </script>
 </body>
