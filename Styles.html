@@ -617,8 +617,17 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
    user request) - the .table-scroll-wrap wrapper scrolls horizontally
    when the total is wider than the viewport instead. */
 .data-table { width: auto; border-collapse: collapse; font-size: calc(12px * var(--content-font-scale)); white-space: normal; table-layout: fixed; }
+/* IMPORTANT: this header background must be a fully OPAQUE color, never
+   a translucent rgba() token like --color-primary-glow. This is a
+   position:sticky header - while scrolling the table body vertically,
+   any transparency here lets the data rows scrolling underneath show
+   through and visually overlap/"ghost" with the header text (exactly
+   the bug reported: row text bleeding through the header row). Solid
+   --bg-surface (with a light accent-tinted border instead of a tinted
+   fill) keeps the visual "this header is accented" cue without ever
+   letting content bleed through. */
 .data-table thead th {
-  position: sticky; top: 0; background: var(--color-primary-glow); color: var(--text-primary);
+  position: sticky; top: 0; background: var(--bg-surface); color: var(--text-primary);
   font-weight: 700; text-align: left; padding: 8px 10px; border-bottom: 2px solid var(--color-primary);
   user-select: none; z-index: 2; overflow: hidden; vertical-align: top;
   transition: background-color 0.35s ease, border-color 0.35s ease;
