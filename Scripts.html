@@ -86,19 +86,257 @@ function toggleGroup(el) {
 }
 
 function openPage(pageName, headerName) {
-  var main = document.getElementById('mainContent');
-  main.innerHTML = '<div class="content-page">' +
-    '<h3>' + escapeHtml(pageName) + '</h3>' +
-    '<p class="subtitle">Category: ' + escapeHtml(headerName) + '</p>' +
-    '<p style="color:var(--text-muted); font-style:italic;">This page content will be configured later.</p>' +
-    '</div>';
   closeSidebar();
-  
+
   // Mark active nav item
   var items = document.querySelectorAll('.nav-item');
   items.forEach(function(item) { item.classList.remove('active'); });
-  // Find and mark the clicked one
-  event.target.closest('.nav-item').classList.add('active');
+  if (window.event && window.event.target) {
+    var clicked = window.event.target.closest('.nav-item');
+    if (clicked) clicked.classList.add('active');
+  }
+
+  FMS.currentHeader = headerName;
+  FMS.currentStep = pageName;
+  loadPendingList(headerName, pageName);
+}
+
+// ===== WORKFLOW: PENDING LIST =====
+function loadPendingList(headerName, stepName) {
+  var main = document.getElementById('mainContent');
+  main.innerHTML =
+    '<div class="content-page">' +
+    '<div class="pending-header">' +
+    '<div><h3>' + escapeHtml(stepName) + '</h3><p class="subtitle">' + escapeHtml(headerName) + '</p></div>' +
+    '<span class="pending-count" id="pendingCount">...</span>' +
+    '</div>' +
+    '<div class="pending-list" id="pendingListContainer">' +
+    '<div class="pending-loading">Loading pending items...</div>' +
+    '</div>' +
+    '</div>';
+
+  google.script.run
+    .withSuccessHandler(function(res) {
+      renderPendingList(res, headerName, stepName);
+    })
+    .withFailureHandler(function(err) {
+      document.getElementById('pendingListContainer').innerHTML =
+        '<div class="pending-empty">' + escapeHtml(err.message) + '</div>';
+    })
+    .wfGetPendingRows(FMS_SESSION.sheetUrl, FMS_SESSION.masterSheet, FMS_SESSION.stepsSheet, headerName, stepName);
+}
+
+function renderPendingList(res, headerName, stepName) {
+  var container = document.getElementById('pendingListContainer');
+  var countBadge = document.getElementById('pendingCount');
+  if (!container) return;
+
+  if (!res.success) {
+    container.innerHTML = '<div class="pending-empty">' +
+      '<span class="material-icons-round">error_outline</span>' + escapeHtml(res.message || 'Error loading pending items') + '</div>';
+    if (countBadge) countBadge.textContent = '0';
+    return;
+  }
+
+  if (countBadge) countBadge.textContent = res.rows.length + ' Pending';
+
+  if (res.rows.length === 0) {
+    container.innerHTML = '<div class="pending-empty">' +
+      '<span class="material-icons-round">task_alt</span>All caught up! No pending items for this step.</div>';
+    return;
+  }
+
+  var html = '';
+  res.rows.forEach(function(item) {
+    html += '<div class="pending-row" onclick="openStepForm(\'' + escapeAttr(headerName) + '\',\'' + escapeAttr(stepName) + '\',' + item.row + ')">' +
+      '<div>' +
+      '<div class="pending-summary">' + escapeHtml(item.summary || ('Row ' + item.row)) + '</div>' +
+      (item.planned ? '<div class="pending-planned">Planned: ' + escapeHtml(item.planned) + '</div>' : '') +
+      '</div>' +
+      '<span class="material-icons-round pending-arrow">chevron_right</span>' +
+      '</div>';
+  });
+  container.innerHTML = html;
+}
+
+// ===== WORKFLOW: POPUP FORM =====
+FMS.uploadedFiles = {}; // fieldName -> [{base64, fileName, mimeType}]
+FMS.currentFormRow = null;
+
+function openStepForm(headerName, stepName, rowNumber) {
+  FMS.currentFormRow = rowNumber;
+  FMS.uploadedFiles = {};
+
+  ensureModalExists();
+  var modal = document.getElementById('fmsModal');
+  document.getElementById('modalTitle').textContent = stepName;
+  document.getElementById('modalBody').innerHTML = '<div class="pending-loading">Loading form...</div>';
+  document.getElementById('modalMsg').className = 'form-msg';
+  document.getElementById('modalMsg').style.display = 'none';
+  modal.classList.add('active');
+
+  google.script.run
+    .withSuccessHandler(function(res) {
+      renderStepForm(res);
+    })
+    .withFailureHandler(function(err) {
+      document.getElementById('modalBody').innerHTML = '<div class="pending-empty">' + escapeHtml(err.message) + '</div>';
+    })
+    .wfGetStepForm(FMS_SESSION.sheetUrl, FMS_SESSION.masterSheet, FMS_SESSION.dropdownSheet || 'DROPDPWN', headerName, stepName, rowNumber);
+}
+
+function renderStepForm(res) {
+  var body = document.getElementById('modalBody');
+  if (!res.success) {
+    body.innerHTML = '<div class="pending-empty">' + escapeHtml(res.message || 'Could not load form') + '</div>';
+    return;
+  }
+
+  var html = '';
+  res.fields.forEach(function(field, idx) {
+    var fid = 'field_' + idx;
+    html += '<div class="form-field" data-field-name="' + escapeAttr(field.name) + '">';
+    html += '<label>' + escapeHtml(field.name) + '</label>';
+
+    if (field.type === 'PLANNED_DISPLAY') {
+      html += '<div class="readonly-display"><span class="material-icons-round">event</span>' +
+        (field.value ? escapeHtml(field.value) : 'Not set yet') + '</div>';
+    } else if (field.type.indexOf('DROPDOWN') !== -1 || field.type.indexOf('CHECKBOX') !== -1) {
+      html += '<select id="' + fid + '"><option value="">-- Select --</option>';
+      (field.options || []).forEach(function(opt) {
+        html += '<option value="' + escapeAttr(opt) + '">' + escapeHtml(opt) + '</option>';
+      });
+      html += '</select>';
+    } else if (field.type.indexOf('LONG TEXT') !== -1) {
+      html += '<textarea id="' + fid + '"></textarea>';
+    } else if (field.type.indexOf('NUMBER') !== -1) {
+      html += '<input type="number" id="' + fid + '">';
+    } else if (field.type.indexOf('FILE') !== -1) {
+      html += '<div class="file-drop" onclick="document.getElementById(\'' + fid + '\').click()">' +
+        '<span class="material-icons-round" style="font-size:24px;display:block;margin-bottom:4px;">cloud_upload</span>' +
+        'Click to upload (multiple files allowed)' +
+        '<input type="file" id="' + fid + '" multiple onchange="handleFileSelect(this, \'' + escapeAttr(field.name) + '\')">' +
+        '</div>' +
+        '<div class="file-list" id="' + fid + '_list"></div>';
+    } else {
+      html += '<input type="text" id="' + fid + '">';
+    }
+    html += '</div>';
+  });
+
+  body.innerHTML = html || '<div class="pending-empty">No fields to fill for this step.</div>';
+}
+
+function handleFileSelect(input, fieldName) {
+  var files = Array.prototype.slice.call(input.files);
+  if (!FMS.uploadedFiles[fieldName]) FMS.uploadedFiles[fieldName] = [];
+
+  files.forEach(function(file) {
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      var base64 = e.target.result.split(',')[1];
+      FMS.uploadedFiles[fieldName].push({ base64: base64, fileName: file.name, mimeType: file.type || 'application/octet-stream' });
+      renderFileList(fieldName);
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderFileList(fieldName) {
+  var fieldDiv = document.querySelector('.form-field[data-field-name="' + fieldName.replace(/"/g, '\\"') + '"]');
+  if (!fieldDiv) return;
+  var listDiv = fieldDiv.querySelector('.file-list');
+  if (!listDiv) return;
+
+  var files = FMS.uploadedFiles[fieldName] || [];
+  listDiv.innerHTML = files.map(function(f, i) {
+    return '<div class="file-chip"><span>' + escapeHtml(f.fileName) + '</span>' +
+      '<span class="remove-file material-icons-round" onclick="removeFile(\'' + escapeAttr(fieldName) + '\',' + i + ')">close</span></div>';
+  }).join('');
+}
+
+function removeFile(fieldName, index) {
+  if (FMS.uploadedFiles[fieldName]) {
+    FMS.uploadedFiles[fieldName].splice(index, 1);
+    renderFileList(fieldName);
+  }
+}
+
+function submitStepForm() {
+  var body = document.getElementById('modalBody');
+  var formValues = {};
+
+  var fieldDivs = body.querySelectorAll('.form-field');
+  fieldDivs.forEach(function(div, idx) {
+    var name = div.getAttribute('data-field-name');
+    var input = div.querySelector('input[type="text"], input[type="number"], textarea, select');
+    if (input) formValues[name] = input.value;
+  });
+
+  var submitBtn = document.getElementById('modalSubmitBtn');
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Saving...';
+
+  google.script.run
+    .withSuccessHandler(function(res) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Submit';
+      var msg = document.getElementById('modalMsg');
+      if (res.success) {
+        msg.className = 'form-msg success';
+        msg.textContent = res.message;
+        msg.style.display = 'block';
+        setTimeout(function() {
+          closeModal();
+          loadPendingList(FMS.currentHeader, FMS.currentStep);
+        }, 1000);
+      } else {
+        msg.className = 'form-msg error';
+        msg.textContent = res.message;
+        msg.style.display = 'block';
+      }
+    })
+    .withFailureHandler(function(err) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Submit';
+      var msg = document.getElementById('modalMsg');
+      msg.className = 'form-msg error';
+      msg.textContent = 'Error: ' + err.message;
+      msg.style.display = 'block';
+    })
+    .wfSubmitStep(FMS_SESSION.sheetUrl, FMS_SESSION.masterSheet, FMS_SESSION.stepsSheet,
+      FMS.currentHeader, FMS.currentStep, FMS.currentFormRow, formValues, FMS.uploadedFiles);
+}
+
+function ensureModalExists() {
+  if (document.getElementById('fmsModal')) return;
+
+  var modalHtml =
+    '<div class="modal-overlay" id="fmsModal">' +
+    '<div class="modal-box">' +
+    '<div class="modal-header"><h3 id="modalTitle">Step Form</h3>' +
+    '<button class="icon-btn" onclick="closeModal()"><span class="material-icons-round">close</span></button></div>' +
+    '<div class="modal-body" id="modalBody"></div>' +
+    '<div class="modal-footer">' +
+    '<div class="form-msg" id="modalMsg" style="width:100%; margin: 0 0 10px 0; display:none;"></div>' +
+    '</div>' +
+    '<div class="modal-footer">' +
+    '<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="modalSubmitBtn" onclick="submitStepForm()">Submit</button>' +
+    '</div>' +
+    '</div>' +
+    '</div>';
+
+  document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+  document.getElementById('fmsModal').addEventListener('click', function(e) {
+    if (e.target.id === 'fmsModal') closeModal();
+  });
+}
+
+function closeModal() {
+  var modal = document.getElementById('fmsModal');
+  if (modal) modal.classList.remove('active');
 }
 
 // ===== LOAD PERMISSIONS =====

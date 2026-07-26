@@ -159,6 +159,10 @@
         <label>Steps Sheet Name</label>
         <input type="text" id="stepsSheet" placeholder="STEPS" value="STEPS">
       </div>
+      <div class="config-row">
+        <label>Dropdown Sheet Name</label>
+        <input type="text" id="dropdownSheet" placeholder="DROPDPWN" value="DROPDPWN">
+      </div>
     </div>
 
     <!-- Login -->
@@ -186,6 +190,7 @@
       var sheetUrl = document.getElementById('sheetUrl').value.trim();
       var masterSheet = document.getElementById('masterSheet').value.trim();
       var stepsSheet = document.getElementById('stepsSheet').value.trim();
+      var dropdownSheet = document.getElementById('dropdownSheet').value.trim();
       var msg = document.getElementById('msg');
       var btn = document.getElementById('loginBtn');
       var label = document.getElementById('btnLabel');
@@ -213,7 +218,8 @@
               loginId: res.loginId,
               sheetUrl: sheetUrl,
               masterSheet: masterSheet,
-              stepsSheet: stepsSheet
+              stepsSheet: stepsSheet,
+              dropdownSheet: dropdownSheet
             };
             setTimeout(function() { goToDashboard(session); }, 1200);
           } else {
