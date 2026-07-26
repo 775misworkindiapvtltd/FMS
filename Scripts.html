@@ -508,12 +508,11 @@ function fetchStepTableInBackground(headerName, stepName, cacheKey, showErrorsIn
     .wfGetStepTableData(FMS_SESSION.sheetUrl, FMS_SESSION.masterSheet, FMS_SESSION.stepsSheet, headerName, stepName);
 }
 
-// A date-column search value comes from a native <input type="date"> as
-// "YYYY-MM-DD". The cell itself holds a formatted string produced by
-// formatResult() in TAT_Calculator.gs, always in the fixed
-// "DD Mon YY HH:MM:SS" style (e.g. "24 Jul 26 17:43:32"). Parsed explicitly
-// (not via new Date(str)) so this works identically across every browser,
-// instead of relying on each browser's own date-string parsing quirks.
+// The cell itself holds a formatted string produced by formatResult() in
+// TAT_Calculator.gs, always in the fixed "DD Mon YY HH:MM:SS" style (e.g.
+// "24 Jul 26 17:43:32"). Parsed explicitly (not via new Date(str)) so this
+// works identically across every browser, instead of relying on each
+// browser's own date-string parsing quirks.
 var FMS_MONTH_LOOKUP = { Jan:0, Feb:1, Mar:2, Apr:3, May:4, Jun:5, Jul:6, Aug:7, Sep:8, Oct:9, Nov:10, Dec:11 };
 
 function parseFmsDate(str) {
@@ -537,15 +536,28 @@ function parseFmsDate(str) {
   return null;
 }
 
-function cellMatchesDateFilter(cellValue, isoDateStr) {
-  if (!isoDateStr) return true;
+/**
+ * Matches a cell's date against a { start: Date, end: Date } range
+ * (inclusive, whole calendar days - time-of-day is ignored on both
+ * sides). A null/undefined range means "no filter" (always matches).
+ */
+function cellMatchesDateRange(cellValue, range) {
+  if (!range || (!range.start && !range.end)) return true;
   var str = String(cellValue || '').trim();
   if (!str) return false;
   var parsed = parseFmsDate(str) || new Date(str); // fallback for any non-FMS-formatted date text
   if (!parsed || isNaN(parsed.getTime())) return false;
-  var pad = function(n) { return (n < 10 ? '0' : '') + n; };
-  var cellIso = parsed.getFullYear() + '-' + pad(parsed.getMonth() + 1) + '-' + pad(parsed.getDate());
-  return cellIso === isoDateStr;
+
+  var cellDay = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+  if (range.start) {
+    var startDay = new Date(range.start.getFullYear(), range.start.getMonth(), range.start.getDate());
+    if (cellDay.getTime() < startDay.getTime()) return false;
+  }
+  if (range.end) {
+    var endDay = new Date(range.end.getFullYear(), range.end.getMonth(), range.end.getDate());
+    if (cellDay.getTime() > endDay.getTime()) return false;
+  }
+  return true;
 }
 
 function isDateColumn(idx) {
@@ -570,7 +582,7 @@ function getFilteredSortedRows() {
       var term = t.colSearch[colIdx];
       if (!term) continue;
       if (isDateColumn(colIdx)) {
-        if (!cellMatchesDateFilter(r.cells[colIdx], term)) return false;
+        if (!cellMatchesDateRange(r.cells[colIdx], term)) return false;
       } else {
         var cellVal = String(r.cells[colIdx] || '').toLowerCase();
         if (cellVal.indexOf(term.toLowerCase()) === -1) return false;
@@ -692,11 +704,15 @@ function renderDataTable(headerName, stepName) {
   visibleIdx.forEach(function(idx) {
     if (isDateColumn(idx)) {
       // Any column holding a Date/Time value (Planned, Actual, Timestamp,
-      // or any Row6 "DATE" type) gets a native calendar-picker in its
-      // search box instead of a plain text box.
+      // or any Row6 "DATE" type) gets the dual-calendar date-RANGE picker
+      // in its search box instead of a plain text box.
+      var range = t.colSearch[idx];
+      var label = formatDateRangeLabel(range);
       html += '<th><div class="date-search-wrap">' +
-        '<input type="date" value="' + escapeAttr(t.colSearch[idx] || '') + '" onchange="onColumnSearch(' + idx + ', this.value)">' +
-        (t.colSearch[idx] ? '<span class="date-search-clear material-icons-round" onclick="onColumnSearch(' + idx + ', \'\')">close</span>' : '') +
+        '<button type="button" class="date-range-trigger" onclick="openDateRangePicker(event, ' + idx + ')">' +
+        '<span class="material-icons-round">date_range</span><span class="date-range-trigger-label">' + escapeHtml(label || 'Any date') + '</span>' +
+        '</button>' +
+        (range ? '<span class="date-search-clear material-icons-round" onclick="onColumnSearch(' + idx + ', null)">close</span>' : '') +
         '</div></th>';
     } else {
       html += '<th><input type="text" placeholder="Search..." value="' + escapeAttr(t.colSearch[idx] || '') + '" oninput="onColumnSearch(' + idx + ', this.value)"></th>';
@@ -866,15 +882,256 @@ function onColumnSearch(colIdx, value) {
   renderDataTable(FMS.currentHeader, FMS.currentStep);
   var inputs = document.querySelectorAll('.col-search-row input');
   var target = inputs[colIdx];
-  if (target) {
+  if (target && typeof target.setSelectionRange === 'function') {
     target.focus();
-    // setSelectionRange is only valid on text-like inputs, not type="date" -
-    // guard it so the calendar-picker column doesn't throw on refocus.
-    if (typeof target.setSelectionRange === 'function' && target.type !== 'date') {
-      target.setSelectionRange(target.value.length, target.value.length);
-    }
+    target.setSelectionRange(target.value.length, target.value.length);
   }
 }
+
+// ================================================================
+// DATE-RANGE PICKER (dual calendar + presets, matches MerTraCode UI)
+// ================================================================
+FMS.dateRangePicker = {
+  open: false,
+  colIdx: null,
+  viewMonth: null,      // Date - first of the LEFT calendar's visible month (right = +1 month)
+  selecting: null,       // 'start' | null - which end of the range the next click sets
+  pendingRange: null     // { start: Date|null, end: Date|null } - working copy until Apply
+};
+
+var DATE_RANGE_PRESETS = [
+  { key: 'today', label: 'Today' },
+  { key: 'yesterday', label: 'Yesterday' },
+  { key: 'thisWeek', label: 'This Week' },
+  { key: 'lastWeek', label: 'Last Week' },
+  { key: 'last7', label: 'Last 7 Days' },
+  { key: 'last30', label: 'Last 30 Days' },
+  { key: 'thisMonth', label: 'This Month' },
+  { key: 'lastMonth', label: 'Last Month' },
+  { key: 'all', label: 'All' }
+];
+
+function startOfDay(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
+
+function computePresetRange(key) {
+  var today = startOfDay(new Date());
+  switch (key) {
+    case 'today': return { start: today, end: today };
+    case 'yesterday': { var y = new Date(today); y.setDate(y.getDate() - 1); return { start: y, end: y }; }
+    case 'thisWeek': { var s = new Date(today); s.setDate(today.getDate() - today.getDay()); return { start: s, end: today }; }
+    case 'lastWeek': { var e = new Date(today); e.setDate(today.getDate() - today.getDay() - 1); var s2 = new Date(e); s2.setDate(e.getDate() - 6); return { start: s2, end: e }; }
+    case 'last7': { var s3 = new Date(today); s3.setDate(today.getDate() - 6); return { start: s3, end: today }; }
+    case 'last30': { var s4 = new Date(today); s4.setDate(today.getDate() - 29); return { start: s4, end: today }; }
+    case 'thisMonth': return { start: new Date(today.getFullYear(), today.getMonth(), 1), end: today };
+    case 'lastMonth': { var lm = new Date(today.getFullYear(), today.getMonth() - 1, 1); var lmEnd = new Date(today.getFullYear(), today.getMonth(), 0); return { start: lm, end: lmEnd }; }
+    case 'all': return null; // no filter
+    default: return null;
+  }
+}
+
+function ensureDateRangePickerExists() {
+  if (document.getElementById('fmsDateRangePicker')) return;
+  var html =
+    '<div class="date-range-overlay" id="fmsDateRangeOverlay" onclick="closeDateRangePicker()"></div>' +
+    '<div class="date-range-picker" id="fmsDateRangePicker">' +
+      '<div class="drp-presets" id="drpPresets"></div>' +
+      '<div class="drp-calendars">' +
+        '<div class="drp-calendars-row">' +
+          '<div class="drp-month" id="drpMonthLeft"></div>' +
+          '<div class="drp-month" id="drpMonthRight"></div>' +
+        '</div>' +
+        '<div class="drp-footer">' +
+          '<button type="button" class="btn btn-secondary" onclick="closeDateRangePicker()">Cancel</button>' +
+          '<button type="button" class="btn btn-primary" onclick="applyDateRangePicker()">Apply</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  document.body.insertAdjacentHTML('beforeend', html);
+  document.getElementById('fmsDateRangePicker').addEventListener('click', function(e) { e.stopPropagation(); });
+}
+
+function openDateRangePicker(e, colIdx) {
+  e.stopPropagation();
+  ensureDateRangePickerExists();
+  var p = FMS.dateRangePicker;
+  p.open = true;
+  p.colIdx = colIdx;
+  var existing = FMS.table.colSearch[colIdx];
+  p.pendingRange = existing ? { start: existing.start, end: existing.end } : { start: null, end: null };
+  p.selecting = null;
+  var anchor = p.pendingRange.start || p.pendingRange.end || new Date();
+  p.viewMonth = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+
+  var picker = document.getElementById('fmsDateRangePicker');
+  var overlay = document.getElementById('fmsDateRangeOverlay');
+  overlay.classList.add('active');
+  picker.classList.add('open');
+
+  // Position the picker near the trigger button that was clicked
+  var btn = e.target.closest ? e.target.closest('.date-range-trigger') : null;
+  if (btn && btn.getBoundingClientRect) {
+    var rect = btn.getBoundingClientRect();
+    picker.style.top = (rect.bottom + 6) + 'px';
+    picker.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 660)) + 'px';
+  }
+
+  renderDateRangePicker();
+}
+
+function closeDateRangePicker() {
+  var picker = document.getElementById('fmsDateRangePicker');
+  var overlay = document.getElementById('fmsDateRangeOverlay');
+  if (picker) picker.classList.remove('open');
+  if (overlay) overlay.classList.remove('active');
+  FMS.dateRangePicker.open = false;
+}
+
+function applyDateRangePicker() {
+  var p = FMS.dateRangePicker;
+  var range = p.pendingRange;
+  onColumnSearch(p.colIdx, (range && (range.start || range.end)) ? range : null);
+  closeDateRangePicker();
+}
+
+function renderDateRangePicker() {
+  var p = FMS.dateRangePicker;
+  if (!p.viewMonth) p.viewMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1); // defensive fallback
+
+  // Presets sidebar
+  var presetsHtml = DATE_RANGE_PRESETS.map(function(preset) {
+    var isActive = isPresetActive(preset.key, p.pendingRange);
+    return '<button type="button" class="drp-preset-btn' + (isActive ? ' active' : '') + '" onclick="selectDateRangePreset(\'' + preset.key + '\')">' + preset.label + '</button>';
+  }).join('');
+  document.getElementById('drpPresets').innerHTML = presetsHtml;
+
+  // Two month calendars: left = viewMonth, right = viewMonth+1
+  var rightMonth = new Date(p.viewMonth.getFullYear(), p.viewMonth.getMonth() + 1, 1);
+  document.getElementById('drpMonthLeft').innerHTML = renderCalendarMonth(p.viewMonth, true);
+  document.getElementById('drpMonthRight').innerHTML = renderCalendarMonth(rightMonth, false);
+}
+
+function isPresetActive(key, range) {
+  if (key === 'all') return !range || (!range.start && !range.end);
+  if (!range || !range.start || !range.end) return false;
+  var expected = computePresetRange(key);
+  if (!expected) return false;
+  return startOfDay(range.start).getTime() === startOfDay(expected.start).getTime() &&
+    startOfDay(range.end).getTime() === startOfDay(expected.end).getTime();
+}
+
+function selectDateRangePreset(key) {
+  var p = FMS.dateRangePicker;
+  p.pendingRange = computePresetRange(key) || { start: null, end: null };
+  if (p.pendingRange.start) p.viewMonth = new Date(p.pendingRange.start.getFullYear(), p.pendingRange.start.getMonth(), 1);
+  renderDateRangePicker();
+}
+
+function renderCalendarMonth(monthDate, isLeft) {
+  var monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  var dayLabels = ['MO','TU','WE','TH','FR','SA','SU'];
+  var year = monthDate.getFullYear(), month = monthDate.getMonth();
+  var p = FMS.dateRangePicker;
+
+  var html = '<div class="drp-month-header">';
+  if (isLeft) html += '<button type="button" class="drp-nav-btn" onclick="navigateDateRangeMonth(-1)"><span class="material-icons-round">chevron_left</span></button>';
+  else html += '<span class="drp-nav-spacer"></span>';
+  html += '<span class="drp-month-label">' + monthNames[month] + ' ' + year + '</span>';
+  if (!isLeft) html += '<button type="button" class="drp-nav-btn" onclick="navigateDateRangeMonth(1)"><span class="material-icons-round">chevron_right</span></button>';
+  else html += '<span class="drp-nav-spacer"></span>';
+  html += '</div>';
+
+  html += '<div class="drp-day-labels">' + dayLabels.map(function(d) { return '<span>' + d + '</span>'; }).join('') + '</div>';
+
+  var firstOfMonth = new Date(year, month, 1);
+  var startOffset = (firstOfMonth.getDay() + 6) % 7; // Monday-first grid
+  var daysInMonth = new Date(year, month + 1, 0).getDate();
+  var daysInPrevMonth = new Date(year, month, 0).getDate();
+
+  var cells = [];
+  for (var i = 0; i < startOffset; i++) {
+    cells.push({ day: daysInPrevMonth - startOffset + 1 + i, otherMonth: true, date: new Date(year, month - 1, daysInPrevMonth - startOffset + 1 + i) });
+  }
+  for (var d = 1; d <= daysInMonth; d++) {
+    cells.push({ day: d, otherMonth: false, date: new Date(year, month, d) });
+  }
+  while (cells.length % 7 !== 0 || cells.length < 42) {
+    var nextDay = cells.length - startOffset - daysInMonth + 1;
+    cells.push({ day: nextDay, otherMonth: true, date: new Date(year, month + 1, nextDay) });
+  }
+
+  html += '<div class="drp-day-grid">';
+  cells.forEach(function(cell) {
+    var classes = ['drp-day'];
+    if (cell.otherMonth) classes.push('other-month');
+    var dayStart = startOfDay(cell.date).getTime();
+    var isToday = dayStart === startOfDay(new Date()).getTime();
+    if (isToday) classes.push('today');
+
+    var range = p.pendingRange;
+    if (range && range.start && range.end) {
+      var s = startOfDay(range.start).getTime(), e = startOfDay(range.end).getTime();
+      if (dayStart === s) classes.push('range-start');
+      if (dayStart === e) classes.push('range-end');
+      if (dayStart > s && dayStart < e) classes.push('in-range');
+    } else if (range && range.start && !range.end) {
+      if (dayStart === startOfDay(range.start).getTime()) classes.push('range-start', 'range-end');
+    }
+
+    html += '<button type="button" class="' + classes.join(' ') + '" onclick="pickDateRangeDay(\'' + cell.date.toISOString() + '\')">' + cell.day + '</button>';
+  });
+  html += '</div>';
+
+  return html;
+}
+
+function navigateDateRangeMonth(delta) {
+  var p = FMS.dateRangePicker;
+  p.viewMonth = new Date(p.viewMonth.getFullYear(), p.viewMonth.getMonth() + delta, 1);
+  renderDateRangePicker();
+}
+
+function pickDateRangeDay(isoStr) {
+  var p = FMS.dateRangePicker;
+  var clicked = startOfDay(new Date(isoStr));
+
+  if (!p.pendingRange.start || (p.pendingRange.start && p.pendingRange.end)) {
+    // Starting a fresh selection
+    p.pendingRange = { start: clicked, end: null };
+  } else {
+    // Completing the range (ensure start <= end)
+    if (clicked.getTime() < p.pendingRange.start.getTime()) {
+      p.pendingRange = { start: clicked, end: p.pendingRange.start };
+    } else {
+      p.pendingRange.end = clicked;
+    }
+  }
+  renderDateRangePicker();
+}
+
+/**
+ * Short label shown on the column header's date-range trigger button,
+ * e.g. "20 Jul - 26 Jul" or "Today" if it matches a preset exactly.
+ */
+function formatDateRangeLabel(range) {
+  if (!range || (!range.start && !range.end)) return '';
+  for (var i = 0; i < DATE_RANGE_PRESETS.length; i++) {
+    if (DATE_RANGE_PRESETS[i].key !== 'all' && isPresetActive(DATE_RANGE_PRESETS[i].key, range)) {
+      return DATE_RANGE_PRESETS[i].label;
+    }
+  }
+  var fmt = function(d) { return d.getDate() + ' ' + FMS_MONTHS[d.getMonth()]; };
+  if (range.start && range.end) {
+    if (startOfDay(range.start).getTime() === startOfDay(range.end).getTime()) return fmt(range.start);
+    return fmt(range.start) + ' - ' + fmt(range.end);
+  }
+  return fmt(range.start || range.end);
+}
+
+// Close the date-range picker on outside click / Escape (mirrors the
+// column show/hide panel's behavior)
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape' && FMS.dateRangePicker && FMS.dateRangePicker.open) closeDateRangePicker();
+});
 
 function onSortColumn(colIdx) {
   var t = FMS.table;
@@ -1020,15 +1277,15 @@ function renderStepForm(res, isInstantFromCache) {
       var plannedText = isInstantFromCache ? 'Loading...' : (field.value ? escapeHtml(field.value) : 'Not set yet');
       html += '<div class="readonly-display"><span class="material-icons-round">event</span>' + plannedText + '</div>';
     } else if (field.type.indexOf('DROPDOWN') !== -1 || field.type.indexOf('CHECKBOX') !== -1) {
-      html += '<select id="' + fid + '"><option value="">-- Select --</option>';
+      html += '<select id="' + fid + '" onchange="onFormFieldChanged(this)"><option value="">-- Select --</option>';
       (field.options || []).forEach(function(opt) {
         html += '<option value="' + escapeAttr(opt) + '">' + escapeHtml(opt) + '</option>';
       });
       html += '</select>';
     } else if (field.type.indexOf('LONG TEXT') !== -1) {
-      html += '<textarea id="' + fid + '"></textarea>';
+      html += '<textarea id="' + fid + '" oninput="onFormFieldChanged(this)"></textarea>';
     } else if (field.type.indexOf('NUMBER') !== -1) {
-      html += '<input type="number" id="' + fid + '">';
+      html += '<input type="number" id="' + fid + '" oninput="onFormFieldChanged(this)">';
     } else if (field.type.indexOf('FILE') !== -1) {
       FMS.requiredFileFields[field.name] = true; // tracked so Submit stays disabled until uploaded
       html += '<div class="file-drop" id="' + fid + '_drop" onclick="document.getElementById(\'' + fid + '\').click()">' +
@@ -1039,7 +1296,7 @@ function renderStepForm(res, isInstantFromCache) {
         '<div class="file-list" id="' + fid + '_list"></div>' +
         '<div class="file-required-hint" id="' + fid + '_hint">File upload required before you can submit</div>';
     } else {
-      html += '<input type="text" id="' + fid + '">';
+      html += '<input type="text" id="' + fid + '" oninput="onFormFieldChanged(this)">';
     }
     html += '</div>';
   });
@@ -1143,6 +1400,8 @@ function updateSubmitButtonState() {
   submitBtn.classList.toggle('btn-disabled-upload', !allUploaded);
 
   // Show/hide the "File upload required" hint under each pending file field
+  // + mark/unmark the field as "filled" (colored label) alongside every
+  // other answered question in the form.
   requiredNames.forEach(function(name) {
     var uploaded = FMS.uploadedFiles[name] && FMS.uploadedFiles[name].length > 0;
     var fieldDiv = document.querySelector('.form-field[data-field-name="' + name.replace(/"/g, '\\"') + '"]');
@@ -1151,7 +1410,22 @@ function updateSubmitButtonState() {
     var drop = fieldDiv.querySelector('.file-drop');
     if (hint) hint.style.display = uploaded ? 'none' : 'block';
     if (drop) drop.classList.toggle('file-drop-done', uploaded);
+    fieldDiv.classList.toggle('field-filled', uploaded);
   });
+}
+
+/**
+ * Marks a question's label with the "answered" color (via .field-filled
+ * on its wrapping .form-field) as soon as the user types/selects a value,
+ * and un-marks it if they clear it back out - applies to every question
+ * type except Planned (never editable) and File-upload (handled inside
+ * updateSubmitButtonState() instead, since it isn't a simple input value).
+ */
+function onFormFieldChanged(inputEl) {
+  var fieldDiv = inputEl.closest('.form-field');
+  if (!fieldDiv) return;
+  var hasValue = String(inputEl.value || '').trim() !== '';
+  fieldDiv.classList.toggle('field-filled', hasValue);
 }
 
 function handleFileSelect(input, fieldName) {
@@ -1310,6 +1584,20 @@ function loadPermissions() {
 }
 
 // ===== UTILITY =====
+/**
+ * Derives 1-2 letter initials from a user's name for the topbar avatar
+ * chip, e.g. "ANKUR" -> "AN", "ANKUR SHARMA" -> "AS".
+ */
+function getInitials(name) {
+  var trimmed = String(name || '').trim();
+  if (!trimmed) return '?';
+  var parts = trimmed.split(/\s+/);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  return trimmed.substring(0, 2).toUpperCase();
+}
+
 function escapeHtml(str) {
   var div = document.createElement('div');
   div.textContent = str;

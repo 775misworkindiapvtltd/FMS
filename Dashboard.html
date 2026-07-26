@@ -22,7 +22,16 @@
       <button class="icon-btn" onclick="toggleSidebar()" title="Menu">
         <span class="material-icons-round">menu</span>
       </button>
-      <div class="topbar-brand"><span>FMS</span> Fashion</div>
+      <div class="topbar-logo-box">
+        <span class="material-icons-round">checkroom</span>
+      </div>
+      <div class="topbar-title-block">
+        <div class="topbar-title">FMS <span>Fashion</span></div>
+        <div class="topbar-subtitle" id="topbarSubtitle">
+          <span class="material-icons-round sync-icon" id="syncIcon">sync</span>
+          <span id="lastUpdatedText">Not synced yet</span>
+        </div>
+      </div>
     </div>
     <div class="topbar-right">
       <div class="font-controls">
@@ -36,16 +45,15 @@
       <button class="icon-btn" onclick="FMSTheme.openDrawer()" title="Appearance">
         <span class="material-icons-round">palette</span>
       </button>
-      <div class="topbar-clock" title="Live clock & last data sync time">
-        <span class="material-icons-round sync-icon" id="syncIcon">sync</span>
-        <div class="clock-block">
-          <div class="clock-time" id="liveClock">--:--:--</div>
-          <div class="last-updated-text" id="lastUpdatedText">Not synced yet</div>
-        </div>
+      <div class="topbar-clock" title="Current time">
+        <div class="clock-time" id="liveClock">--:--:--</div>
       </div>
-      <div class="user-badge">
-        <span class="material-icons-round">account_circle</span>
-        <span id="userDisplay">User</span>
+      <div class="user-avatar-chip" title="Logged in user">
+        <div class="user-avatar-initials" id="userInitials">U</div>
+        <div class="user-avatar-text">
+          <div class="user-avatar-name" id="userDisplay">User</div>
+          <div class="user-avatar-role">FMS Fashion</div>
+        </div>
       </div>
     </div>
   </div>
@@ -94,6 +102,8 @@
     window.onload = function() {
       if (typeof FMS_SESSION !== 'undefined') {
         document.getElementById('userDisplay').textContent = FMS_SESSION.userName;
+        var initialsEl = document.getElementById('userInitials');
+        if (initialsEl) initialsEl.textContent = getInitials(FMS_SESSION.userName);
         loadPermissions();
         goHome(); // Home dashboard summary is the landing page after login
       }
