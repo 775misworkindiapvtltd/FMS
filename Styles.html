@@ -303,6 +303,18 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
 .sidebar:hover .sidebar-header h3, .sidebar.pinned .sidebar-header h3 { opacity: 1; width: auto; }
 .sidebar-header .icon-btn { flex-shrink: 0; }
 
+/* Circular expand/pin trigger (replaces the old "close" X icon). Points
+   right by default (collapsed rail = "click to expand"), rotates to
+   point left once the sidebar is actually expanded (hovered or pinned) =
+   "click to collapse" - toggleSidebar() handles both directions via the
+   same click, this just keeps the icon direction always meaningful. */
+.sidebar-toggle-btn { border-radius: 50%; }
+.sidebar-toggle-btn .material-icons-round { transition: transform 0.28s cubic-bezier(0.4,0,0.2,1); }
+.sidebar:hover .sidebar-toggle-btn .material-icons-round,
+.sidebar.pinned .sidebar-toggle-btn .material-icons-round {
+  transform: rotate(180deg);
+}
+
 .sidebar-nav { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 6px; }
 .sidebar:hover .sidebar-nav, .sidebar.pinned .sidebar-nav { padding: 10px; }
 
@@ -726,13 +738,21 @@ tr.row-overdue td.col-serial { border-left: 3px solid var(--danger); }
    in red): margin-top 8px->6px, and every button/text inside it uses
    less vertical padding + slightly smaller font so the whole bar sits
    noticeably shorter without becoming hard to tap/read. */
+/* "Showing X-Y of Z" and the Prev/Page/Next controls must always stay
+   together on ONE line (never stack top/bottom) - same single-line
+   pattern used everywhere else in the app (topbar, status-tabs-row,
+   table-toolbar). Falls back to horizontal scroll instead of wrapping
+   if the window is ever too narrow to fit both halves. */
 .table-pagination {
-  display: flex; align-items: center; justify-content: space-between; margin-top: 6px; flex-wrap: wrap; gap: 8px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: space-between; margin-top: 6px; gap: 8px; flex-shrink: 0;
+  flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
 }
+.table-pagination::-webkit-scrollbar { display: none; }
+.pagination-controls { flex-shrink: 0; }
 /* Pagination bar's own font sizes are fixed px (NOT scaled by
    --content-font-scale) - A/A+/A++ must never affect this bar, even
    though it lives inside #mainContent, per user request. */
-.pagination-info { font-size: 10px; color: var(--text-muted); }
+.pagination-info { font-size: 10px; color: var(--text-muted); flex-shrink: 0; white-space: nowrap; }
 .pagination-controls { display: flex; align-items: center; gap: 8px; }
 .page-btn {
   padding: 4px 13px; border-radius: var(--radius-sm); border: 1px solid var(--border);

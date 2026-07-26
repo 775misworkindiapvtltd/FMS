@@ -70,8 +70,15 @@
   <div class="sidebar" id="sidebar">
     <div class="sidebar-header">
       <h3>&#9776; Navigation</h3>
-      <button class="icon-btn" onclick="closeSidebar()" title="Close">
-        <span class="material-icons-round">close</span>
+      <!-- Was a "close" (X) icon - didn't make sense on an always-visible
+           hover-expand rail (there's nothing modal to "close"). Replaced
+           with a circular right-arrow expand/pin trigger: click pins the
+           sidebar open (toggleSidebar()) - same action as hovering, but
+           needed for touch devices and as an explicit "lock it open"
+           control. Rotates to point left once expanded/pinned (see CSS),
+           so it always visually indicates what clicking it will do. -->
+      <button class="icon-btn sidebar-toggle-btn" onclick="toggleSidebar()" title="Expand sidebar">
+        <span class="material-icons-round">chevron_right</span>
       </button>
     </div>
     <div class="sidebar-nav" id="sidebarNav">
