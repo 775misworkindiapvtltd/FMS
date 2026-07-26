@@ -277,11 +277,104 @@ function getRowSummary(sheet, rowNumber, firstStepStartCol) {
 }
 
 function formatDateSafe(val) {
-  if (!val) return '';
+  if (val === null || val === undefined || val === '') return '';
   if (val instanceof Date) {
     return formatResult(val); // reuses formatResult() from TAT_Calculator.gs
   }
   return String(val);
+}
+
+// ============================================
+// FULL TABLE DATA FOR A STEP (mirrors the real sheet)
+// ============================================
+//
+// Returns ALL rows applicable to this step (previous step done, or first
+// step with base data present) - both pending and completed - along with
+// column headers taken from Row 7 (base columns + this step's own columns
+// only, so the user only sees the step he has rights to work on).
+//
+function getStepTableData(masterSheetUrl, masterSheetName, stepsSheetName, header, stepName) {
+  try {
+    var target = getTargetSheetInfo(masterSheetUrl, masterSheetName, header);
+    if (!target) return { success: false, message: 'Target sheet info not found in MASTER for header: ' + header };
+
+    var targetSs = SpreadsheetApp.openByUrl(target.sheetUrl);
+    var sheet = targetSs.getSheetByName(target.sheetName);
+    if (!sheet) return { success: false, message: 'Target sheet "' + target.sheetName + '" not found' };
+
+    var masterSs = SpreadsheetApp.openByUrl(masterSheetUrl);
+    var allSteps = getAllStepsForHeader(masterSs, stepsSheetName, header);
+    var stepIndex = -1;
+    for (var i = 0; i < allSteps.length; i++) {
+      if (allSteps[i].toUpperCase() === stepName.trim().toUpperCase()) { stepIndex = i; break; }
+    }
+    if (stepIndex === -1) return { success: false, message: 'Step not found in STEPS sheet for this header' };
+
+    var currentRange = findStepColumnRange(sheet, stepName);
+    if (!currentRange) return { success: false, message: 'Step columns not found in target sheet (check Row ' + WF_STEP_NAME_ROW + ')' };
+    var currentFields = getStepFields(sheet, currentRange);
+    var currentPA = getPlannedActualCols(currentFields);
+
+    var prevActualCol = null;
+    if (stepIndex > 0) {
+      var prevRange = findStepColumnRange(sheet, allSteps[stepIndex - 1]);
+      if (prevRange) {
+        var prevFields = getStepFields(sheet, prevRange);
+        prevActualCol = getPlannedActualCols(prevFields).actualCol;
+      }
+    }
+
+    // Column headers: base IDENTIFYING columns are everything BEFORE the
+    // FIRST step in the pipeline (not before the current step - otherwise
+    // earlier steps' own columns would leak in) + this step's own columns only.
+    var firstStepRange = findStepColumnRange(sheet, allSteps[0]);
+    var baseColCount = firstStepRange ? Math.max(0, firstStepRange.startCol - 1) : Math.max(0, currentRange.startCol - 1);
+    var headerRowVals = baseColCount > 0
+      ? sheet.getRange(WF_FIELD_NAME_ROW, 1, 1, baseColCount).getValues()[0]
+      : [];
+
+    var columnNames = [];
+    for (var bc = 0; bc < baseColCount; bc++) {
+      columnNames.push(String(headerRowVals[bc]).trim() || ('Col ' + (bc + 1)));
+    }
+    currentFields.forEach(function (f) {
+      columnNames.push(f.name || ('Col ' + f.col));
+    });
+
+    var lastRow = sheet.getLastRow();
+    var rows = [];
+
+    for (var r = WF_DATA_START_ROW; r <= lastRow; r++) {
+      var isApplicable = false;
+      if (stepIndex === 0) {
+        var baseVal = sheet.getRange(r, 1).getValue();
+        isApplicable = !!baseVal;
+      } else if (prevActualCol) {
+        var prevVal = sheet.getRange(r, prevActualCol).getValue();
+        isApplicable = !!prevVal;
+      }
+      if (!isApplicable) continue;
+
+      var actualVal = currentPA.actualCol ? sheet.getRange(r, currentPA.actualCol).getValue() : '';
+      var status = (actualVal !== '' && actualVal !== null) ? 'completed' : 'pending';
+
+      var rowValues = sheet.getRange(r, 1, 1, currentRange.endCol).getValues()[0];
+      var cells = [];
+      for (var bc2 = 0; bc2 < baseColCount; bc2++) {
+        cells.push(formatDateSafe(rowValues[bc2]));
+      }
+      currentFields.forEach(function (f) {
+        cells.push(formatDateSafe(rowValues[f.col - 1]));
+      });
+
+      rows.push({ row: r, status: status, cells: cells });
+    }
+
+    return { success: true, columns: columnNames, rows: rows };
+
+  } catch (e) {
+    return { success: false, message: 'Error: ' + e.message };
+  }
 }
 
 // ============================================
@@ -496,4 +589,8 @@ function wfGetStepForm(sheetUrl, masterSheet, dropdownSheet, header, stepName, r
 
 function wfSubmitStep(sheetUrl, masterSheet, stepsSheet, header, stepName, rowNumber, formValues, fileUploads) {
   return submitStepData(sheetUrl, masterSheet, stepsSheet, header, stepName, rowNumber, formValues, fileUploads);
+}
+
+function wfGetStepTableData(sheetUrl, masterSheet, stepsSheet, header, stepName) {
+  return getStepTableData(sheetUrl, masterSheet, stepsSheet, header, stepName);
 }

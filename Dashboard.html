@@ -25,6 +25,13 @@
       <button class="icon-btn" onclick="toggleTheme()" title="Toggle Theme">
         <span class="material-icons-round" id="themeIcon">light_mode</span>
       </button>
+      <div class="topbar-clock" title="Live clock & last data sync time">
+        <span class="material-icons-round sync-icon" id="syncIcon">sync</span>
+        <div class="clock-block">
+          <div class="clock-time" id="liveClock">--:--:--</div>
+          <div class="last-updated-text" id="lastUpdatedText">Not synced yet</div>
+        </div>
+      </div>
       <div class="user-badge">
         <span class="material-icons-round">account_circle</span>
         <span id="userDisplay">User</span>
@@ -68,6 +75,8 @@
         document.getElementById('userDisplay').textContent = FMS_SESSION.userName;
         loadPermissions();
       }
+      startLiveClock();
+      startAutoRefresh();
     };
   </script>
 </body>

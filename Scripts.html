@@ -6,8 +6,125 @@
 var FMS = {
   sidebarOpen: false,
   currentTheme: 'dark',
-  currentFontSize: 'medium'
+  currentFontSize: 'medium',
+  tableCache: {},        // "header|||step" -> { columns, rows, fetchedAt }
+  permissionsCache: null,
+  lastSyncTime: null,
+  autoRefreshTimer: null,
+  clockTimer: null,
+  syncInFlight: false,
+  AUTO_REFRESH_MS: 5 * 60 * 1000 // 5 minutes
 };
+
+// ===== LIVE CLOCK (top-right, ticks every second) =====
+function startLiveClock() {
+  updateLiveClock();
+  if (FMS.clockTimer) clearInterval(FMS.clockTimer);
+  FMS.clockTimer = setInterval(updateLiveClock, 1000);
+}
+
+function updateLiveClock() {
+  var el = document.getElementById('liveClock');
+  if (!el) return;
+  var now = new Date();
+  var pad = function(n) { return (n < 10 ? '0' : '') + n; };
+  el.textContent = pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds());
+}
+
+// ===== AUTO-REFRESH (background, silent - no spinners, no reload feel) =====
+function startAutoRefresh() {
+  if (FMS.autoRefreshTimer) clearInterval(FMS.autoRefreshTimer);
+  FMS.autoRefreshTimer = setInterval(function() {
+    silentRefreshCurrentView();
+  }, FMS.AUTO_REFRESH_MS);
+}
+
+function setSyncingState(isSyncing) {
+  var icon = document.getElementById('syncIcon');
+  if (icon) icon.classList.toggle('syncing', isSyncing);
+}
+
+function setLastUpdatedNow(changed) {
+  FMS.lastSyncTime = new Date();
+  var el = document.getElementById('lastUpdatedText');
+  if (!el) return;
+  var pad = function(n) { return (n < 10 ? '0' : '') + n; };
+  var d = FMS.lastSyncTime;
+  var stamp = pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  el.textContent = 'Updated: ' + stamp;
+  if (changed) {
+    el.classList.add('updated-flash');
+    setTimeout(function() { el.classList.remove('updated-flash'); }, 2500);
+  }
+}
+
+/**
+ * Silently re-fetch permissions (sidebar) + current table (if any) in the
+ * background. Does NOT show any loading spinner - only a small sync icon
+ * animation - and only touches the DOM if the data actually changed.
+ */
+function silentRefreshCurrentView() {
+  if (FMS.syncInFlight) return;
+  if (typeof FMS_SESSION === 'undefined') return;
+  FMS.syncInFlight = true;
+  setSyncingState(true);
+
+  var pending = 1;
+  var anyChanged = false;
+
+  function done() {
+    pending--;
+    if (pending <= 0) {
+      FMS.syncInFlight = false;
+      setSyncingState(false);
+      setLastUpdatedNow(anyChanged);
+    }
+  }
+
+  // Refresh sidebar permissions silently (remembers headers/questions, just checks for changes)
+  google.script.run
+    .withSuccessHandler(function(res) {
+      if (res.success) {
+        var newStr = JSON.stringify(res.permissions);
+        var oldStr = JSON.stringify(FMS.permissionsCache);
+        if (newStr !== oldStr) {
+          FMS.permissionsCache = res.permissions;
+          renderSidebar(res.permissions);
+          anyChanged = true;
+        }
+      }
+      done();
+    })
+    .withFailureHandler(function() { done(); })
+    .getUserPermissions(FMS_SESSION.userName);
+
+  // Refresh current table silently, if user currently has one open
+  if (FMS.currentHeader && FMS.currentStep) {
+    pending++;
+    var cacheKey = FMS.currentHeader + '|||' + FMS.currentStep;
+    google.script.run
+      .withSuccessHandler(function(res) {
+        if (res.success) {
+          var newStr = JSON.stringify(res.rows) + JSON.stringify(res.columns);
+          var cached = FMS.tableCache[cacheKey];
+          var oldStr = cached ? (JSON.stringify(cached.rows) + JSON.stringify(cached.columns)) : null;
+          if (newStr !== oldStr) {
+            FMS.tableCache[cacheKey] = { columns: res.columns, rows: res.rows, fetchedAt: new Date() };
+            FMS.table.columns = res.columns;
+            FMS.table.rows = res.rows;
+            // Only re-render if this table is still the one on screen
+            if (document.getElementById('tableContainer')) {
+              renderDataTable(FMS.currentHeader, FMS.currentStep);
+            }
+            anyChanged = true;
+          }
+        }
+        done();
+      })
+      .withFailureHandler(function() { done(); })
+      .wfGetStepTableData(FMS_SESSION.sheetUrl, FMS_SESSION.masterSheet, FMS_SESSION.stepsSheet, FMS.currentHeader, FMS.currentStep);
+  }
+}
 
 // ===== SIDEBAR =====
 function toggleSidebar() {
@@ -98,65 +215,259 @@ function openPage(pageName, headerName) {
 
   FMS.currentHeader = headerName;
   FMS.currentStep = pageName;
-  loadPendingList(headerName, pageName);
+  loadStepTable(headerName, pageName);
 }
 
-// ===== WORKFLOW: PENDING LIST =====
-function loadPendingList(headerName, stepName) {
-  var main = document.getElementById('mainContent');
-  main.innerHTML =
-    '<div class="content-page">' +
-    '<div class="pending-header">' +
-    '<div><h3>' + escapeHtml(stepName) + '</h3><p class="subtitle">' + escapeHtml(headerName) + '</p></div>' +
-    '<span class="pending-count" id="pendingCount">...</span>' +
-    '</div>' +
-    '<div class="pending-list" id="pendingListContainer">' +
-    '<div class="pending-loading">Loading pending items...</div>' +
-    '</div>' +
-    '</div>';
+// ===== WORKFLOW: DATA TABLE (mirrors the real sheet) =====
+FMS.table = {
+  columns: [],
+  rows: [],
+  filterStatus: 'pending',   // 'pending' | 'completed' | 'all'
+  globalSearch: '',
+  colSearch: {},              // colIndex -> search text
+  sortCol: null,
+  sortDir: 'asc',
+  page: 1,
+  pageSize: 50
+};
 
+/**
+ * Loads a Step's table. If we already have cached data for this exact
+ * header+step (from a previous visit or a background auto-refresh), it is
+ * rendered INSTANTLY with no spinner - the header/questions/columns are
+ * "remembered". A fresh copy is then fetched silently in the background
+ * to pick up any new rows, without blocking or re-showing a loader.
+ */
+function loadStepTable(headerName, stepName) {
+  var main = document.getElementById('mainContent');
+  var cacheKey = headerName + '|||' + stepName;
+  var cached = FMS.tableCache[cacheKey];
+
+  FMS.table.filterStatus = 'pending';
+  FMS.table.globalSearch = '';
+  FMS.table.colSearch = {};
+  FMS.table.sortCol = null;
+  FMS.table.page = 1;
+
+  if (cached) {
+    // Instant render from cache - no spinner, no "circle ghoomna"
+    main.innerHTML =
+      '<div class="content-page table-page">' +
+      '<div class="table-page-header">' +
+      '<div><h3>' + escapeHtml(stepName) + '</h3><p class="subtitle">' + escapeHtml(headerName) + '</p></div>' +
+      '</div>' +
+      '<div id="tableContainer"></div>' +
+      '</div>';
+    FMS.table.columns = cached.columns;
+    FMS.table.rows = cached.rows;
+    renderDataTable(headerName, stepName);
+    fetchStepTableInBackground(headerName, stepName, cacheKey, false);
+  } else {
+    // First time opening this step - show loader once
+    main.innerHTML =
+      '<div class="content-page table-page">' +
+      '<div class="table-page-header">' +
+      '<div><h3>' + escapeHtml(stepName) + '</h3><p class="subtitle">' + escapeHtml(headerName) + '</p></div>' +
+      '</div>' +
+      '<div id="tableContainer"><div class="pending-loading">Loading data...</div></div>' +
+      '</div>';
+    fetchStepTableInBackground(headerName, stepName, cacheKey, true);
+  }
+}
+
+function fetchStepTableInBackground(headerName, stepName, cacheKey, showErrorsInline) {
   google.script.run
     .withSuccessHandler(function(res) {
-      renderPendingList(res, headerName, stepName);
+      if (!res.success) {
+        if (showErrorsInline) {
+          document.getElementById('tableContainer').innerHTML =
+            '<div class="pending-empty"><span class="material-icons-round">error_outline</span>' + escapeHtml(res.message || 'Error loading data') + '</div>';
+        }
+        return;
+      }
+      FMS.tableCache[cacheKey] = { columns: res.columns, rows: res.rows, fetchedAt: new Date() };
+      // Only update the visible table if the user is still viewing this exact step
+      if (FMS.currentHeader === headerName && FMS.currentStep === stepName) {
+        FMS.table.columns = res.columns;
+        FMS.table.rows = res.rows;
+        if (document.getElementById('tableContainer')) {
+          renderDataTable(headerName, stepName);
+        }
+      }
+      setLastUpdatedNow(false);
     })
     .withFailureHandler(function(err) {
-      document.getElementById('pendingListContainer').innerHTML =
-        '<div class="pending-empty">' + escapeHtml(err.message) + '</div>';
+      if (showErrorsInline) {
+        document.getElementById('tableContainer').innerHTML =
+          '<div class="pending-empty">' + escapeHtml(err.message) + '</div>';
+      }
     })
-    .wfGetPendingRows(FMS_SESSION.sheetUrl, FMS_SESSION.masterSheet, FMS_SESSION.stepsSheet, headerName, stepName);
+    .wfGetStepTableData(FMS_SESSION.sheetUrl, FMS_SESSION.masterSheet, FMS_SESSION.stepsSheet, headerName, stepName);
 }
 
-function renderPendingList(res, headerName, stepName) {
-  var container = document.getElementById('pendingListContainer');
-  var countBadge = document.getElementById('pendingCount');
-  if (!container) return;
+function getFilteredSortedRows() {
+  var t = FMS.table;
+  var rows = t.rows.filter(function(r) {
+    if (t.filterStatus !== 'all' && r.status !== t.filterStatus) return false;
 
-  if (!res.success) {
-    container.innerHTML = '<div class="pending-empty">' +
-      '<span class="material-icons-round">error_outline</span>' + escapeHtml(res.message || 'Error loading pending items') + '</div>';
-    if (countBadge) countBadge.textContent = '0';
-    return;
+    if (t.globalSearch) {
+      var hay = r.cells.join(' ').toLowerCase();
+      if (hay.indexOf(t.globalSearch.toLowerCase()) === -1) return false;
+    }
+
+    for (var colIdx in t.colSearch) {
+      var term = t.colSearch[colIdx];
+      if (!term) continue;
+      var cellVal = String(r.cells[colIdx] || '').toLowerCase();
+      if (cellVal.indexOf(term.toLowerCase()) === -1) return false;
+    }
+    return true;
+  });
+
+  if (t.sortCol !== null) {
+    rows.sort(function(a, b) {
+      var va = a.cells[t.sortCol] || '';
+      var vb = b.cells[t.sortCol] || '';
+      var na = parseFloat(va), nb = parseFloat(vb);
+      var cmp;
+      if (!isNaN(na) && !isNaN(nb) && va !== '' && vb !== '') {
+        cmp = na - nb;
+      } else {
+        cmp = String(va).localeCompare(String(vb));
+      }
+      return t.sortDir === 'asc' ? cmp : -cmp;
+    });
   }
 
-  if (countBadge) countBadge.textContent = res.rows.length + ' Pending';
+  return rows;
+}
 
-  if (res.rows.length === 0) {
-    container.innerHTML = '<div class="pending-empty">' +
-      '<span class="material-icons-round">task_alt</span>All caught up! No pending items for this step.</div>';
-    return;
-  }
+function renderDataTable(headerName, stepName) {
+  var t = FMS.table;
+  var allRows = t.rows;
+  var pendingCount = allRows.filter(function(r){ return r.status === 'pending'; }).length;
+  var completedCount = allRows.filter(function(r){ return r.status === 'completed'; }).length;
+
+  var filtered = getFilteredSortedRows();
+  var totalPages = Math.max(1, Math.ceil(filtered.length / t.pageSize));
+  if (t.page > totalPages) t.page = totalPages;
+  var startIdx = (t.page - 1) * t.pageSize;
+  var pageRows = filtered.slice(startIdx, startIdx + t.pageSize);
 
   var html = '';
-  res.rows.forEach(function(item) {
-    html += '<div class="pending-row" onclick="openStepForm(\'' + escapeAttr(headerName) + '\',\'' + escapeAttr(stepName) + '\',' + item.row + ')">' +
-      '<div>' +
-      '<div class="pending-summary">' + escapeHtml(item.summary || ('Row ' + item.row)) + '</div>' +
-      (item.planned ? '<div class="pending-planned">Planned: ' + escapeHtml(item.planned) + '</div>' : '') +
-      '</div>' +
-      '<span class="material-icons-round pending-arrow">chevron_right</span>' +
-      '</div>';
+
+  // ---- Status filter tabs ----
+  html += '<div class="status-tabs">';
+  html += statusTabHtml('pending', 'Pending', pendingCount, t.filterStatus);
+  html += statusTabHtml('completed', 'Completed', completedCount, t.filterStatus);
+  html += statusTabHtml('all', 'All', allRows.length, t.filterStatus);
+  html += '</div>';
+
+  // ---- Global search + page size ----
+  html += '<div class="table-toolbar">';
+  html += '<div class="table-search"><span class="material-icons-round">search</span>' +
+    '<input type="text" id="tableGlobalSearch" placeholder="Search all columns..." value="' + escapeAttr(t.globalSearch) + '" oninput="onGlobalSearch(this.value)"></div>';
+  html += '<div class="page-size-select">Show ' +
+    '<select id="pageSizeSelect" onchange="onPageSizeChange(this.value)">' +
+    [50, 100, 500, 1000].map(function(n) { return '<option value="' + n + '"' + (t.pageSize === n ? ' selected' : '') + '>' + n + '</option>'; }).join('') +
+    '</select> entries</div>';
+  html += '</div>';
+
+  // ---- Table ----
+  html += '<div class="table-scroll-wrap"><table class="data-table"><thead>';
+  html += '<tr>';
+  t.columns.forEach(function(col, idx) {
+    var arrow = t.sortCol === idx ? (t.sortDir === 'asc' ? ' ▲' : ' ▼') : '';
+    html += '<th onclick="onSortColumn(' + idx + ')">' + escapeHtml(col) + arrow + '</th>';
   });
-  container.innerHTML = html;
+  html += '<th class="col-action">Action</th>';
+  html += '</tr><tr class="col-search-row">';
+  t.columns.forEach(function(col, idx) {
+    html += '<th><input type="text" placeholder="Search..." value="' + escapeAttr(t.colSearch[idx] || '') + '" oninput="onColumnSearch(' + idx + ', this.value)"></th>';
+  });
+  html += '<th></th>';
+  html += '</tr></thead><tbody>';
+
+  if (pageRows.length === 0) {
+    html += '<tr><td colspan="' + (t.columns.length + 1) + '" class="table-empty-cell">No matching records found.</td></tr>';
+  } else {
+    pageRows.forEach(function(r) {
+      html += '<tr>';
+      r.cells.forEach(function(cell) {
+        html += '<td>' + escapeHtml(String(cell || '')) + '</td>';
+      });
+      html += '<td class="col-action">';
+      if (r.status === 'pending') {
+        html += '<button class="btn-fill" onclick="openStepForm(\'' + escapeAttr(headerName) + '\',\'' + escapeAttr(stepName) + '\',' + r.row + ')">Fill</button>';
+      } else {
+        html += '<span class="status-badge-done">Done</span>';
+      }
+      html += '</td></tr>';
+    });
+  }
+
+  html += '</tbody></table></div>';
+
+  // ---- Pagination ----
+  html += '<div class="table-pagination">';
+  html += '<span class="pagination-info">Showing ' + (filtered.length === 0 ? 0 : startIdx + 1) + '-' + Math.min(startIdx + t.pageSize, filtered.length) + ' of ' + filtered.length + '</span>';
+  html += '<div class="pagination-controls">';
+  html += '<button class="page-btn" ' + (t.page <= 1 ? 'disabled' : '') + ' onclick="onPageChange(' + (t.page - 1) + ')">Prev</button>';
+  html += '<span class="page-indicator">Page ' + t.page + ' of ' + totalPages + '</span>';
+  html += '<button class="page-btn" ' + (t.page >= totalPages ? 'disabled' : '') + ' onclick="onPageChange(' + (t.page + 1) + ')">Next</button>';
+  html += '</div></div>';
+
+  document.getElementById('tableContainer').innerHTML = html;
+}
+
+function statusTabHtml(key, label, count, active) {
+  return '<button class="status-tab' + (active === key ? ' active' : '') + '" onclick="onStatusFilter(\'' + key + '\')">' +
+    label + ' <span class="status-tab-count">' + count + '</span></button>';
+}
+
+function onStatusFilter(status) {
+  FMS.table.filterStatus = status;
+  FMS.table.page = 1;
+  renderDataTable(FMS.currentHeader, FMS.currentStep);
+}
+
+function onGlobalSearch(value) {
+  FMS.table.globalSearch = value;
+  FMS.table.page = 1;
+  renderDataTable(FMS.currentHeader, FMS.currentStep);
+  // restore focus after re-render
+  var el = document.getElementById('tableGlobalSearch');
+  if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+}
+
+function onColumnSearch(colIdx, value) {
+  FMS.table.colSearch[colIdx] = value;
+  FMS.table.page = 1;
+  renderDataTable(FMS.currentHeader, FMS.currentStep);
+  var inputs = document.querySelectorAll('.col-search-row input');
+  if (inputs[colIdx]) { inputs[colIdx].focus(); inputs[colIdx].setSelectionRange(inputs[colIdx].value.length, inputs[colIdx].value.length); }
+}
+
+function onSortColumn(colIdx) {
+  var t = FMS.table;
+  if (t.sortCol === colIdx) {
+    t.sortDir = t.sortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    t.sortCol = colIdx;
+    t.sortDir = 'asc';
+  }
+  renderDataTable(FMS.currentHeader, FMS.currentStep);
+}
+
+function onPageSizeChange(value) {
+  FMS.table.pageSize = parseInt(value, 10);
+  FMS.table.page = 1;
+  renderDataTable(FMS.currentHeader, FMS.currentStep);
+}
+
+function onPageChange(newPage) {
+  FMS.table.page = newPage;
+  renderDataTable(FMS.currentHeader, FMS.currentStep);
 }
 
 // ===== WORKFLOW: POPUP FORM =====
@@ -288,7 +599,9 @@ function submitStepForm() {
         msg.style.display = 'block';
         setTimeout(function() {
           closeModal();
-          loadPendingList(FMS.currentHeader, FMS.currentStep);
+          // Force a fresh fetch (bypass cache) since this row just changed
+          delete FMS.tableCache[FMS.currentHeader + '|||' + FMS.currentStep];
+          loadStepTable(FMS.currentHeader, FMS.currentStep);
         }, 1000);
       } else {
         msg.className = 'form-msg error';
@@ -339,14 +652,16 @@ function closeModal() {
   if (modal) modal.classList.remove('active');
 }
 
-// ===== LOAD PERMISSIONS =====
+// ===== LOAD PERMISSIONS (sidebar headers/steps - remembered across refreshes) =====
 function loadPermissions() {
   if (typeof FMS_SESSION === 'undefined') return;
   
   google.script.run
     .withSuccessHandler(function(res) {
       if (res.success) {
+        FMS.permissionsCache = res.permissions;
         renderSidebar(res.permissions);
+        setLastUpdatedNow(false);
       } else {
         document.getElementById('sidebarNav').innerHTML = 
           '<div style="padding:20px; color:var(--danger); font-size:12px; text-align:center;">' + 
