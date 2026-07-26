@@ -10,8 +10,18 @@
 // Styles.html      - Shared CSS styles (included via include())
 // Scripts.html     - Shared JS scripts (included via include())
 // TAT_Calculator.gs - TAT calculation functions
+// WorkflowEngine.gs - Pending list / popup form / step submission logic
 //
 // ============================================
+
+// ============================================
+// FIXED CONFIGURATION (not entered by user - hardcoded for this deployment)
+// User only enters Login ID + Password on the Login page.
+// ============================================
+var FMS_SHEET_URL = 'https://docs.google.com/spreadsheets/d/10Aqav9bM_XQ28TkfjoXOoj8jRHenMerIEcx8gYkwo48/edit?usp=drive_web&ouid=114024121405657848674';
+var FMS_MASTER_SHEET = 'MASTER';
+var FMS_STEPS_SHEET = 'STEPS';
+var FMS_DROPDOWN_SHEET = 'DROPDPWN';
 
 function doGet() {
   return HtmlService.createTemplateFromFile('Login')
@@ -31,11 +41,13 @@ function include(filename) {
 
 // ============================================
 // LOGIN VALIDATION
+// Called from Login.html with ONLY loginId + password.
+// Sheet URL / Sheet names are fixed server-side (FMS_SHEET_URL etc. above).
 // ============================================
-function validateLogin(loginId, password, sheetUrl, sheetName) {
+function validateLogin(loginId, password) {
   try {
-    var ss = SpreadsheetApp.openByUrl(sheetUrl);
-    var sheet = ss.getSheetByName(sheetName);
+    var ss = SpreadsheetApp.openByUrl(FMS_SHEET_URL);
+    var sheet = ss.getSheetByName(FMS_MASTER_SHEET);
     
     if (!sheet) {
       return { success: false, message: 'Sheet not found! Check Sheet Name.' };
@@ -61,7 +73,11 @@ function validateLogin(loginId, password, sheetUrl, sheetName) {
           success: true, 
           message: 'Login Successful! Welcome ' + userName,
           userName: userName,
-          loginId: sheetLogin
+          loginId: sheetLogin,
+          sheetUrl: FMS_SHEET_URL,
+          masterSheet: FMS_MASTER_SHEET,
+          stepsSheet: FMS_STEPS_SHEET,
+          dropdownSheet: FMS_DROPDOWN_SHEET
         };
       }
     }
@@ -76,10 +92,10 @@ function validateLogin(loginId, password, sheetUrl, sheetName) {
 // ============================================
 // GET PERMISSIONS FOR LOGGED IN USER
 // ============================================
-function getUserPermissions(userName, sheetUrl, stepsSheetName) {
+function getUserPermissions(userName) {
   try {
-    var ss = SpreadsheetApp.openByUrl(sheetUrl);
-    var sheet = ss.getSheetByName(stepsSheetName);
+    var ss = SpreadsheetApp.openByUrl(FMS_SHEET_URL);
+    var sheet = ss.getSheetByName(FMS_STEPS_SHEET);
     
     if (!sheet) {
       return { success: false, message: 'Steps sheet not found!', permissions: {} };

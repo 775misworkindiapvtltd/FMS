@@ -67,27 +67,6 @@
     .login-header h1 span { background: linear-gradient(135deg, #667eea, #764ba2); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
     .login-header p { font-size: 11px; color: rgba(255,255,255,0.4); margin-top: 4px; letter-spacing: 2px; text-transform: uppercase; }
 
-    /* Config */
-    .config-section {
-      background: rgba(255,255,255,0.03); border-radius: 14px; padding: 14px 16px;
-      border: 1px solid rgba(255,255,255,0.05); margin-bottom: 20px;
-    }
-    .config-title {
-      font-size: 10px; color: rgba(255,255,255,0.35); text-transform: uppercase;
-      letter-spacing: 1.5px; margin-bottom: 10px; font-weight: 600;
-    }
-    .config-row { margin-bottom: 8px; }
-    .config-row:last-child { margin-bottom: 0; }
-    .config-row label { display: block; font-size: 10px; color: rgba(255,255,255,0.45); margin-bottom: 3px; }
-    .config-row input {
-      width: 100%; padding: 9px 12px; background: rgba(255,255,255,0.04);
-      border: 1px solid rgba(255,255,255,0.08); border-radius: 8px;
-      font-size: 12px; color: #fff; font-family: 'Poppins', sans-serif; outline: none;
-      transition: border-color 0.3s;
-    }
-    .config-row input:focus { border-color: #667eea; }
-    .config-row input::placeholder { color: rgba(255,255,255,0.2); }
-
     /* Fields */
     .field { position: relative; margin-bottom: 18px; }
     .field .material-icons-round {
@@ -144,27 +123,6 @@
       <p>Flow Management System</p>
     </div>
 
-    <!-- Sheet Config -->
-    <div class="config-section">
-      <div class="config-title">&#9881; Sheet Configuration</div>
-      <div class="config-row">
-        <label>Google Sheet URL</label>
-        <input type="text" id="sheetUrl" placeholder="Paste your Google Sheet URL...">
-      </div>
-      <div class="config-row">
-        <label>Master Sheet Name</label>
-        <input type="text" id="masterSheet" placeholder="MASTER" value="MASTER">
-      </div>
-      <div class="config-row">
-        <label>Steps Sheet Name</label>
-        <input type="text" id="stepsSheet" placeholder="STEPS" value="STEPS">
-      </div>
-      <div class="config-row">
-        <label>Dropdown Sheet Name</label>
-        <input type="text" id="dropdownSheet" placeholder="DROPDPWN" value="DROPDPWN">
-      </div>
-    </div>
-
     <!-- Login -->
     <div class="field">
       <span class="material-icons-round">person</span>
@@ -187,16 +145,11 @@
     function doLogin() {
       var loginId = document.getElementById('loginId').value.trim();
       var password = document.getElementById('password').value.trim();
-      var sheetUrl = document.getElementById('sheetUrl').value.trim();
-      var masterSheet = document.getElementById('masterSheet').value.trim();
-      var stepsSheet = document.getElementById('stepsSheet').value.trim();
-      var dropdownSheet = document.getElementById('dropdownSheet').value.trim();
       var msg = document.getElementById('msg');
       var btn = document.getElementById('loginBtn');
       var label = document.getElementById('btnLabel');
       var spinner = document.getElementById('btnSpinner');
 
-      if (!sheetUrl) { showMsg('Please enter Google Sheet URL!', 'error'); return; }
       if (!loginId) { showMsg('Please enter Login ID!', 'error'); return; }
       if (!password) { showMsg('Please enter Password!', 'error'); return; }
 
@@ -216,10 +169,10 @@
             var session = {
               userName: res.userName,
               loginId: res.loginId,
-              sheetUrl: sheetUrl,
-              masterSheet: masterSheet,
-              stepsSheet: stepsSheet,
-              dropdownSheet: dropdownSheet
+              sheetUrl: res.sheetUrl,
+              masterSheet: res.masterSheet,
+              stepsSheet: res.stepsSheet,
+              dropdownSheet: res.dropdownSheet
             };
             setTimeout(function() { goToDashboard(session); }, 1200);
           } else {
@@ -232,7 +185,7 @@
           btn.disabled = false;
           showMsg('Error: ' + err.message, 'error');
         })
-        .validateLogin(loginId, password, sheetUrl, masterSheet);
+        .validateLogin(loginId, password);
     }
 
     function showMsg(text, type) {

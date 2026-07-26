@@ -357,7 +357,7 @@ function loadPermissions() {
       document.getElementById('sidebarNav').innerHTML = 
         '<div style="padding:20px; color:var(--danger); font-size:12px; text-align:center;">Error: ' + err.message + '</div>';
     })
-    .getUserPermissions(FMS_SESSION.userName, FMS_SESSION.sheetUrl, FMS_SESSION.stepsSheet);
+    .getUserPermissions(FMS_SESSION.userName);
 }
 
 // ===== UTILITY =====
