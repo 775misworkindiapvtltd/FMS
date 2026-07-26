@@ -430,6 +430,10 @@ function calculateTATLocal(submissionDateTime, tatHours, officeStartTime, office
  * timestamp, etc).
  *
  * Format: "DD Mon YY HH:MM:SS" (24-hour time), e.g. "24 Jul 26 17:43:32"
+ *
+ * EXCEPTION: if the time portion is exactly 00:00:00 (i.e. the value is a
+ * pure date with no meaningful time - e.g. a plain date entered without a
+ * time), the time is omitted entirely and only "DD Mon YY" is shown.
  */
 function formatResult(date) {
   var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -441,6 +445,11 @@ function formatResult(date) {
   var hh = pad2(date.getHours());
   var mm = pad2(date.getMinutes());
   var ss = pad2(date.getSeconds());
+
+  var isMidnight = (date.getHours() === 0 && date.getMinutes() === 0 && date.getSeconds() === 0);
+  if (isMidnight) {
+    return dd + ' ' + mon + ' ' + yy;
+  }
 
   return dd + ' ' + mon + ' ' + yy + ' ' + hh + ':' + mm + ':' + ss;
 }

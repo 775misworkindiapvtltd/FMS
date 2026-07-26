@@ -51,8 +51,11 @@ function setSyncingState(isSyncing) {
 var FMS_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 function formatFmsDate(d) {
   var pad2 = function(n) { return ('0' + n).slice(-2); };
-  return pad2(d.getDate()) + ' ' + FMS_MONTHS[d.getMonth()] + ' ' + pad2(d.getFullYear() % 100) + ' ' +
-    pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+  var dd = pad2(d.getDate()) + ' ' + FMS_MONTHS[d.getMonth()] + ' ' + pad2(d.getFullYear() % 100);
+  // Mirror formatResult() in TAT_Calculator.gs: omit the time entirely
+  // when it's exactly 00:00:00 (a pure date with no meaningful time).
+  if (d.getHours() === 0 && d.getMinutes() === 0 && d.getSeconds() === 0) return dd;
+  return dd + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
 }
 
 function setLastUpdatedNow(changed) {
@@ -289,12 +292,11 @@ function loadStepTable(headerName, stepName) {
   FMS.table.colWidths = prefs.colWidths;
   FMS.table.hiddenCols = prefs.hiddenCols;
 
-  // Compact page-title strip (step name + header as a small breadcrumb,
-  // not a big heading) so more vertical space goes to the actual data.
+  // Compact page-title strip (step name + header as a small breadcrumb)
+  // is placed INLINE with the status tabs (same row) - saves one whole
+  // line of vertical space so more table rows are visible on screen.
   var pageShell =
     '<div class="table-page">' +
-    '<div class="table-page-title"><span class="material-icons-round">assignment</span>' +
-    '<strong>' + escapeHtml(stepName) + '</strong><span class="breadcrumb-sep">/</span>' + escapeHtml(headerName) + '</div>' +
     '<div id="tableContainer"></div>' +
     '</div>';
 
@@ -355,12 +357,23 @@ var FMS_MONTH_LOOKUP = { Jan:0, Feb:1, Mar:2, Apr:3, May:4, Jun:5, Jul:6, Aug:7,
 
 function parseFmsDate(str) {
   str = String(str || '').trim();
+  // Full "DD Mon YY HH:MM:SS" (normal case)
   var m = /^(\d{2})\s+([A-Za-z]{3})\s+(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/.exec(str);
-  if (!m) return null;
-  var monthIdx = FMS_MONTH_LOOKUP[m[2]];
-  if (monthIdx === undefined) return null;
-  var year = 2000 + parseInt(m[3], 10); // "26" -> 2026
-  return new Date(year, monthIdx, parseInt(m[1], 10), parseInt(m[4], 10), parseInt(m[5], 10), parseInt(m[6], 10));
+  if (m) {
+    var monthIdx = FMS_MONTH_LOOKUP[m[2]];
+    if (monthIdx === undefined) return null;
+    var year = 2000 + parseInt(m[3], 10); // "26" -> 2026
+    return new Date(year, monthIdx, parseInt(m[1], 10), parseInt(m[4], 10), parseInt(m[5], 10), parseInt(m[6], 10));
+  }
+  // Date-only "DD Mon YY" (formatResult() omits a 00:00:00 time entirely)
+  var m2 = /^(\d{2})\s+([A-Za-z]{3})\s+(\d{2})$/.exec(str);
+  if (m2) {
+    var monthIdx2 = FMS_MONTH_LOOKUP[m2[2]];
+    if (monthIdx2 === undefined) return null;
+    var year2 = 2000 + parseInt(m2[3], 10);
+    return new Date(year2, monthIdx2, parseInt(m2[1], 10), 0, 0, 0);
+  }
+  return null;
 }
 
 function cellMatchesDateFilter(cellValue, isoDateStr) {
@@ -455,11 +468,16 @@ function renderDataTable(headerName, stepName) {
 
   var html = '';
 
-  // ---- Status filter tabs ----
+  // ---- Breadcrumb title + Status filter tabs on the SAME row (saves a
+  // whole line of vertical space vs. having the title on its own row) ----
+  html += '<div class="status-tabs-row">';
+  html += '<div class="table-page-title"><span class="material-icons-round">assignment</span>' +
+    '<strong>' + escapeHtml(stepName) + '</strong><span class="breadcrumb-sep">/</span>' + escapeHtml(headerName) + '</div>';
   html += '<div class="status-tabs">';
   html += statusTabHtml('pending', 'Pending', pendingCount, t.filterStatus);
   html += statusTabHtml('completed', 'Completed', completedCount, t.filterStatus);
   html += statusTabHtml('all', 'All', allRows.length, t.filterStatus);
+  html += '</div>';
   html += '</div>';
 
   // ---- Global search + column visibility toggle + page size ----
@@ -709,30 +727,100 @@ function onPageChange(newPage) {
 // ===== WORKFLOW: POPUP FORM =====
 FMS.uploadedFiles = {}; // fieldName -> [{base64, fileName, mimeType}]
 FMS.currentFormRow = null;
+FMS.currentFormHeader = null;
+FMS.currentFormStep = null;
+
+// The form's FIELD STRUCTURE (which fields exist, their Data Type, and
+// their Dropdown options) is identical for every row of the same Step -
+// only the "Planned" value differs per row. So the structure is cached
+// per header+step (like the table cache) and reused instantly on every
+// subsequent "Fill" click for that step, instead of re-fetching and
+// re-showing "Loading form..." every single time.
+FMS.formStructureCache = {}; // "header|||step" -> fields[] (from last successful fetch)
 
 function openStepForm(headerName, stepName, rowNumber) {
   FMS.currentFormRow = rowNumber;
+  FMS.currentFormHeader = headerName;
+  FMS.currentFormStep = stepName;
   FMS.uploadedFiles = {};
 
   ensureModalExists();
   var modal = document.getElementById('fmsModal');
   document.getElementById('modalTitle').textContent = stepName;
-  document.getElementById('modalBody').innerHTML = '<div class="pending-loading">Loading form...</div>';
   document.getElementById('modalMsg').className = 'form-msg';
   document.getElementById('modalMsg').style.display = 'none';
   modal.classList.add('active');
 
+  var cacheKey = headerName + '|||' + stepName;
+  var cachedFields = FMS.formStructureCache[cacheKey];
+
+  if (cachedFields) {
+    // Instant render from cache - no spinner. Every field is safe to reuse
+    // as-is EXCEPT "Planned" (row-specific), which is shown as a quick
+    // "Loading..." placeholder until the background fetch confirms the
+    // real value for THIS row (usually resolves in well under a second).
+    renderStepForm({ success: true, fields: cachedFields }, true);
+    fetchStepFormInBackground(headerName, stepName, rowNumber, cacheKey, false);
+  } else {
+    // First time ever opening this step's form - show the loader once.
+    var body = document.getElementById('modalBody');
+    if (body) delete body.dataset.formLoadedOnce;
+    document.getElementById('modalBody').innerHTML = '<div class="pending-loading">Loading form...</div>';
+    fetchStepFormInBackground(headerName, stepName, rowNumber, cacheKey, true);
+  }
+}
+
+/**
+ * Patches only the "Planned" read-only display in-place, without touching
+ * any other field the user may already be filling in. Used when the
+ * background confirmation fetch resolves after an instant cache-render.
+ */
+function updatePlannedDisplay(fields) {
+  var plannedField = fields.filter(function(f) { return f.type === 'PLANNED_DISPLAY'; })[0];
+  if (!plannedField) return;
+  var fieldDiv = document.querySelector('.form-field[data-field-name="' + plannedField.name.replace(/"/g, '\\"') + '"]');
+  if (!fieldDiv) return;
+  var display = fieldDiv.querySelector('.readonly-display');
+  if (display) {
+    display.innerHTML = '<span class="material-icons-round">event</span>' +
+      (plannedField.value ? escapeHtml(plannedField.value) : 'Not set yet');
+  }
+}
+
+function fetchStepFormInBackground(headerName, stepName, rowNumber, cacheKey, showErrorsInline) {
   google.script.run
     .withSuccessHandler(function(res) {
-      renderStepForm(res);
+      if (!res.success) {
+        if (showErrorsInline) {
+          document.getElementById('modalBody').innerHTML = '<div class="pending-empty">' + escapeHtml(res.message || 'Could not load form') + '</div>';
+        }
+        return;
+      }
+      FMS.formStructureCache[cacheKey] = res.fields;
+      // Only touch the modal if the user is still on this exact step+row
+      // (they may have closed it or clicked a different row already).
+      if (FMS.currentFormHeader === headerName && FMS.currentFormStep === stepName && FMS.currentFormRow === rowNumber) {
+        var formBody = document.getElementById('modalBody');
+        if (formBody && formBody.dataset.formLoadedOnce) {
+          // Form was already rendered from cache and the user may already
+          // be typing - only patch the ONE row-specific field ("Planned")
+          // in place, instead of re-rendering the whole form and wiping
+          // out whatever the user has already entered.
+          updatePlannedDisplay(res.fields);
+        } else {
+          renderStepForm(res, false);
+        }
+      }
     })
     .withFailureHandler(function(err) {
-      document.getElementById('modalBody').innerHTML = '<div class="pending-empty">' + escapeHtml(err.message) + '</div>';
+      if (showErrorsInline) {
+        document.getElementById('modalBody').innerHTML = '<div class="pending-empty">' + escapeHtml(err.message) + '</div>';
+      }
     })
     .wfGetStepForm(FMS_SESSION.sheetUrl, FMS_SESSION.masterSheet, FMS_SESSION.dropdownSheet || 'DROPDPWN', headerName, stepName, rowNumber);
 }
 
-function renderStepForm(res) {
+function renderStepForm(res, isInstantFromCache) {
   var body = document.getElementById('modalBody');
   if (!res.success) {
     body.innerHTML = '<div class="pending-empty">' + escapeHtml(res.message || 'Could not load form') + '</div>';
@@ -746,8 +834,12 @@ function renderStepForm(res) {
     html += '<label>' + escapeHtml(field.name) + '</label>';
 
     if (field.type === 'PLANNED_DISPLAY') {
-      html += '<div class="readonly-display"><span class="material-icons-round">event</span>' +
-        (field.value ? escapeHtml(field.value) : 'Not set yet') + '</div>';
+      // "Planned" is the ONE field that's genuinely row-specific, so when
+      // instantly rendering from cache it must show a neutral placeholder
+      // (not the previous row's cached date) until the quick background
+      // fetch confirms the real value for this exact row.
+      var plannedText = isInstantFromCache ? 'Loading...' : (field.value ? escapeHtml(field.value) : 'Not set yet');
+      html += '<div class="readonly-display"><span class="material-icons-round">event</span>' + plannedText + '</div>';
     } else if (field.type.indexOf('DROPDOWN') !== -1 || field.type.indexOf('CHECKBOX') !== -1) {
       html += '<select id="' + fid + '"><option value="">-- Select --</option>';
       (field.options || []).forEach(function(opt) {
@@ -772,6 +864,7 @@ function renderStepForm(res) {
   });
 
   body.innerHTML = html || '<div class="pending-empty">No fields to fill for this step.</div>';
+  body.dataset.formLoadedOnce = '1';
 }
 
 function handleFileSelect(input, fieldName) {
@@ -835,8 +928,13 @@ function submitStepForm() {
         msg.style.display = 'block';
         setTimeout(function() {
           closeModal();
-          // Force a fresh fetch (bypass cache) since this row just changed
-          delete FMS.tableCache[FMS.currentHeader + '|||' + FMS.currentStep];
+          // IMPORTANT: do NOT delete the table cache here. loadStepTable()
+          // already renders instantly from the existing cache (so the
+          // header row + pagination bar NEVER disappear/flash) and then
+          // silently re-fetches fresh rows in the background - the exact
+          // same "instant + silent refresh" pattern used everywhere else.
+          // Force-clearing the cache used to make every single submit
+          // show a full-page loader that wiped out the header+pagination.
           loadStepTable(FMS.currentHeader, FMS.currentStep);
         }, 1000);
       } else {
