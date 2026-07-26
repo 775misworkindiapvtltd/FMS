@@ -575,6 +575,23 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
   font-size: calc(10.5px * var(--content-font-scale)); font-weight: 600;
 }
 
+/* ===== OVERDUE HIGHLIGHTING ===== */
+/* A row is overdue when it's still Pending AND its Planned date/time has
+   already passed. Subtle tinted background on the whole row + a compact
+   red/orange badge next to the Fill button (per user request). */
+tr.row-overdue td { background: rgba(255,82,82,0.06); }
+tr.row-overdue:hover td { background: rgba(255,82,82,0.12); }
+tr.row-overdue td.col-serial { border-left: 3px solid var(--danger); }
+.status-badge-overdue {
+  display: inline-flex; align-items: center; gap: 3px; padding: 3px 8px; margin-right: 6px;
+  border-radius: 7px; background: rgba(255,82,82,0.14); color: var(--danger);
+  font-size: calc(9.5px * var(--content-font-scale)); font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px;
+}
+.status-badge-overdue .material-icons-round { font-size: 12px !important; }
+.status-tab-overdue { color: var(--danger) !important; border-color: rgba(255,82,82,0.3) !important; }
+.status-tab-overdue:hover { border-color: var(--danger) !important; }
+.status-tab-overdue.active { background: linear-gradient(135deg, #ff5252, #d32f2f) !important; color: #fff !important; }
+
 .table-pagination {
   display: flex; align-items: center; justify-content: space-between; margin-top: 8px; flex-wrap: wrap; gap: 8px; flex-shrink: 0;
 }
@@ -617,6 +634,51 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
   font-size: 11px; font-weight: 600; cursor: pointer;
 }
 .column-panel-reset:hover { background: var(--color-primary-glow); }
+
+/* ===== HOME DASHBOARD (summary of all assigned Steps) ===== */
+.home-page { flex: 1; overflow-y: auto; padding-bottom: 10px; }
+
+.home-header { margin-bottom: 18px; }
+.home-header h2 { font-size: 20px; font-weight: 700; color: var(--text-primary); margin-bottom: 3px; }
+.home-header .subtitle { font-size: 12.5px; color: var(--text-secondary); }
+
+.home-stats-row { display: flex; gap: 14px; margin-bottom: 22px; flex-wrap: wrap; }
+.home-stat-card {
+  flex: 1; min-width: 160px; display: flex; align-items: center; gap: 14px;
+  padding: 16px 18px; border-radius: var(--radius-lg); border: 1px solid var(--border);
+  background: var(--bg-card);
+}
+.home-stat-card .material-icons-round { font-size: 30px; padding: 10px; border-radius: var(--radius-md); }
+.home-stat-card.stat-pending .material-icons-round { color: var(--warning); background: rgba(255,171,64,0.12); }
+.home-stat-card.stat-completed .material-icons-round { color: var(--success); background: rgba(0,230,118,0.12); }
+.home-stat-card.stat-total .material-icons-round { color: var(--color-primary); background: var(--color-primary-glow); }
+.home-stat-count { font-size: 24px; font-weight: 700; color: var(--text-primary); line-height: 1.1; }
+.home-stat-label { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+
+.home-group { margin-bottom: 22px; }
+.home-group-title {
+  display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 600;
+  color: var(--text-primary); margin-bottom: 12px;
+}
+.home-group-title .material-icons-round { font-size: 17px; color: var(--accent); }
+
+.home-cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+.home-step-card {
+  padding: 14px 16px; border-radius: var(--radius-md); border: 1px solid var(--border);
+  background: var(--bg-card); cursor: pointer; transition: var(--transition);
+}
+.home-step-card:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: var(--shadow); }
+.home-step-card.has-pending { border-left: 3px solid var(--warning); }
+.home-step-card-title {
+  font-size: 12.5px; font-weight: 600; color: var(--text-primary); margin-bottom: 10px;
+  overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.home-step-card-counts { display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 8px; }
+.hs-pending { color: var(--warning); font-weight: 600; }
+.hs-completed { color: var(--success); font-weight: 600; }
+.home-step-progress { height: 5px; border-radius: 4px; background: var(--border); overflow: hidden; }
+.home-step-progress-fill { height: 100%; background: var(--success); border-radius: 4px; transition: width 0.4s ease; }
+.home-step-card-error { font-size: 10.5px; color: var(--danger); }
 
 /* ===== APPEARANCE DRAWER (Display Mode + Color Scheme + Live Preview) ===== */
 .appearance-overlay {
@@ -733,21 +795,63 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
 /* Responsive: on touch/small screens there's no hover, so the sidebar
    starts fully off-screen and only opens via the topbar menu button
    (toggles the .pinned class), appearing as a full overlay drawer. */
+/* ===========================================================
+   MOBILE-FRIENDLY RESPONSIVE STYLES (phones/small tablets)
+   =========================================================== */
 @media (max-width: 768px) {
-  .topbar { padding: 0 12px; }
-  .main-content { padding: 14px; margin-left: 0; }
+  .topbar { padding: 0 10px; left: 0; } /* no persistent rail reserved on mobile - topbar spans full width */
+  .main-content { padding: 10px 12px; margin-left: 0; }
   /* On narrow screens, keep everything on one line (per user request) by
      shrinking non-essential text instead of hiding/wrapping it. */
   .user-badge span:not(.material-icons-round) { display: inline; }
-  .modal-box { max-width: 100%; }
+  .user-badge { padding: 4px 8px; }
+  .topbar-brand { font-size: 13px; }
+  .topbar-clock { display: none; } /* least essential item - first to go on very narrow phones */
+  .font-controls .font-btn { padding: 4px 6px; font-size: 9.5px; }
+
+  .modal-box { max-width: 100%; max-height: 94vh; border-radius: var(--radius-md); }
+  .modal-box.modal-wide { max-width: 100%; }
+  .form-fields-grid { grid-template-columns: 1fr; } /* 2-col form collapses to 1-col on phones */
+  .modal-header, .modal-body, .modal-footer { padding: 14px 16px; }
+
   .table-toolbar { flex-direction: column; align-items: stretch; }
+  .table-toolbar-right { flex-wrap: wrap; }
+  .status-tabs-row { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .status-tabs { width: 100%; }
+
   .appearance-drawer { width: 100%; max-width: 100%; }
   .display-mode-tiles, .color-scheme-grid { grid-template-columns: repeat(2, 1fr); }
 
   .sidebar { width: 0; box-shadow: none; }
   .sidebar:hover { width: 0; box-shadow: none; } /* no hover-expand on touch */
-  .sidebar.pinned { width: var(--sidebar-width); box-shadow: 16px 0 40px rgba(0,0,0,0.35); }
+  .sidebar.pinned { width: min(var(--sidebar-width), 82vw); box-shadow: 16px 0 40px rgba(0,0,0,0.35); }
   .sidebar-overlay.active { display: block; }
-  .topbar { left: 0; } /* no persistent rail reserved on mobile - topbar spans full width */
+
+  /* Home dashboard: stack stat cards, single-column step cards */
+  .home-header h2 { font-size: 17px; }
+  .home-stats-row { flex-direction: column; }
+  .home-stat-card { min-width: 100%; }
+  .home-cards-grid { grid-template-columns: 1fr; }
+
+  /* Data table on phones: allow the whole table area to scroll
+     horizontally (columns keep their set widths, no forced squeeze),
+     while touch-scrolling stays smooth. Fill button / badges stay
+     compact so the Action column doesn't dominate the width. */
+  .table-scroll-wrap { -webkit-overflow-scrolling: touch; }
+  .btn-fill { padding: 5px 10px; }
+  .status-badge-overdue { display: block; width: fit-content; margin: 0 0 4px 0; }
+
+  .pagination-controls { flex-wrap: wrap; justify-content: center; }
+  .page-size-select { width: 100%; justify-content: space-between; }
+
+  .column-panel { width: 85vw; right: -8px; }
+}
+
+/* Extra-small phones */
+@media (max-width: 420px) {
+  .topbar-brand { display: none; } /* logo icon area still visible via sidebar toggle */
+  .font-controls { display: none; } /* least essential control on the smallest screens */
+  .home-stat-card { padding: 12px 14px; }
+  .modal-header h3 { font-size: 13px; }
 }
 </style>

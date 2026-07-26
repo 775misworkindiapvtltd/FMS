@@ -135,7 +135,21 @@ function isFieldConfigured(field) {
   var n = field.name.toLowerCase();
   if (n.indexOf('planned') !== -1) return true;
   if (n.indexOf('actual') !== -1) return true;
+  if (n.indexOf('modified by') !== -1) return true;
+  if (n.indexOf('modified at') !== -1) return true;
   return !!field.type; // must have a non-empty Data Type (Row 6) to appear
+}
+
+/**
+ * "Modified By" / "Modified At" are an optional audit trail: written
+ * automatically on every submit (see submitStepData()), never shown as
+ * an editable question in the popup form, and hidden by default in the
+ * table (still toggleable via the Show/Hide Columns panel for anyone who
+ * wants to check who filled a row).
+ */
+function isAuditTrailField(fieldName) {
+  var n = (fieldName || '').toLowerCase();
+  return n.indexOf('modified by') !== -1 || n.indexOf('modified at') !== -1;
 }
 
 // ============================================
@@ -206,6 +220,139 @@ function getTargetSheetInfo(masterSheetUrl, masterSheetName, header) {
   }
 
   return null;
+}
+
+/**
+ * Same logic as Code.gs's getUserPermissions(userName), but parametrized
+ * (doesn't rely on the FMS_SHEET_URL/FMS_STEPS_SHEET globals) so it can be
+ * reused here for the Home dashboard summary without duplicating logic
+ * in two places that could drift apart.
+ */
+function getUserPermissionsInternal(masterSheetUrl, stepsSheetName, userName) {
+  try {
+    var ss = SpreadsheetApp.openByUrl(masterSheetUrl);
+    var sheet = ss.getSheetByName(stepsSheetName);
+    if (!sheet) return { success: false, message: 'Steps sheet not found!', permissions: {} };
+
+    var data = sheet.getDataRange().getValues();
+    var permissions = [];
+
+    for (var i = 0; i < data.length; i++) {
+      var colC = String(data[i][2]).trim().toUpperCase();
+      if (colC === userName.toUpperCase()) {
+        var header = String(data[i][0]).trim();
+        var subItem = String(data[i][1]).trim();
+        if (header && subItem) permissions.push({ header: header, subItem: subItem });
+      }
+    }
+
+    var grouped = {};
+    for (var j = 0; j < permissions.length; j++) {
+      var h = permissions[j].header;
+      if (!grouped[h]) grouped[h] = [];
+      grouped[h].push(permissions[j].subItem);
+    }
+
+    return { success: true, permissions: grouped };
+  } catch (e) {
+    return { success: false, message: 'Error: ' + e.message, permissions: {} };
+  }
+}
+
+// ============================================
+// HOME DASHBOARD SUMMARY (Pending/Completed counts per assigned Step)
+// ============================================
+//
+// Lightweight version of getStepTableData() that only counts row
+// statuses (pending/completed) instead of building full column/cell
+// data - much cheaper to run for EVERY header+step a user has, which is
+// what the Home page needs to show its summary cards.
+function getStepCounts(masterSheetUrl, masterSheetName, stepsSheetName, header, stepName) {
+  var target = getTargetSheetInfo(masterSheetUrl, masterSheetName, header);
+  if (!target) return { pending: 0, completed: 0, error: 'Target sheet not found for header: ' + header };
+
+  var targetSs = SpreadsheetApp.openByUrl(target.sheetUrl);
+  var sheet = targetSs.getSheetByName(target.sheetName);
+  if (!sheet) return { pending: 0, completed: 0, error: 'Sheet "' + target.sheetName + '" not found' };
+
+  var masterSs = SpreadsheetApp.openByUrl(masterSheetUrl);
+  var allSteps = getAllStepsForHeader(masterSs, stepsSheetName, header);
+  var stepIndex = -1;
+  for (var i = 0; i < allSteps.length; i++) {
+    if (allSteps[i].toUpperCase() === stepName.trim().toUpperCase()) { stepIndex = i; break; }
+  }
+  if (stepIndex === -1) return { pending: 0, completed: 0, error: 'Step not found in STEPS sheet' };
+
+  var currentRange = findStepColumnRange(sheet, stepName);
+  if (!currentRange) return { pending: 0, completed: 0, error: 'Step columns not found (check Row ' + WF_STEP_NAME_ROW + ')' };
+  var currentFields = getStepFields(sheet, currentRange);
+  var currentPA = getPlannedActualCols(currentFields);
+
+  var prevActualCol = null;
+  if (stepIndex > 0) {
+    var prevRange = findStepColumnRange(sheet, allSteps[stepIndex - 1]);
+    if (prevRange) {
+      var prevFields = getStepFields(sheet, prevRange);
+      prevActualCol = getPlannedActualCols(prevFields).actualCol;
+    }
+  }
+
+  var lastRow = sheet.getLastRow();
+  var pending = 0, completed = 0;
+
+  for (var r = WF_DATA_START_ROW; r <= lastRow; r++) {
+    var isApplicable = false;
+    if (stepIndex === 0) {
+      isApplicable = !!sheet.getRange(r, 1).getValue();
+    } else if (prevActualCol) {
+      isApplicable = !!sheet.getRange(r, prevActualCol).getValue();
+    }
+    if (!isApplicable) continue;
+
+    var actualVal = currentPA.actualCol ? sheet.getRange(r, currentPA.actualCol).getValue() : '';
+    if (actualVal !== '' && actualVal !== null) completed++; else pending++;
+  }
+
+  return { pending: pending, completed: completed };
+}
+
+/**
+ * Builds the full Home dashboard summary: for every Header/Step the user
+ * has permission for (same source as getUserPermissions), returns the
+ * Pending/Completed counts, plus grand totals across everything.
+ */
+function getHomeSummary(masterSheetUrl, masterSheetName, stepsSheetName, userName) {
+  try {
+    var permsRes = getUserPermissionsInternal(masterSheetUrl, stepsSheetName, userName);
+    if (!permsRes.success) return { success: false, message: permsRes.message, groups: [] };
+
+    var groups = [];
+    var totalPending = 0, totalCompleted = 0;
+
+    for (var header in permsRes.permissions) {
+      var steps = permsRes.permissions[header];
+      var stepEntries = [];
+
+      steps.forEach(function (stepName) {
+        var counts = getStepCounts(masterSheetUrl, masterSheetName, stepsSheetName, header, stepName);
+        stepEntries.push({
+          step: stepName,
+          pending: counts.pending || 0,
+          completed: counts.completed || 0,
+          error: counts.error || null
+        });
+        totalPending += (counts.pending || 0);
+        totalCompleted += (counts.completed || 0);
+      });
+
+      groups.push({ header: header, steps: stepEntries });
+    }
+
+    return { success: true, groups: groups, totalPending: totalPending, totalCompleted: totalCompleted };
+
+  } catch (e) {
+    return { success: false, message: 'Error: ' + e.message, groups: [] };
+  }
 }
 
 // ============================================
@@ -361,8 +508,12 @@ function getStepTableData(masterSheetUrl, masterSheetName, stepsSheetName, heade
     // columnTypes runs parallel to columnNames - lets the client know
     // which columns hold dates/times, so it can render a calendar-picker
     // in that column's search box instead of a plain text search.
+    // defaultHiddenCols marks which column INDEXES should start hidden in
+    // the table by default (currently just the audit trail columns) -
+    // the user can still reveal them anytime via Show/Hide Columns.
     var columnNames = [];
     var columnTypes = [];
+    var defaultHiddenCols = [];
     for (var bc = 0; bc < baseColCount; bc++) {
       var baseName = String(headerRowVals[bc]).trim() || ('Col ' + (bc + 1));
       var baseType = String(baseTypeVals[bc]).trim().toUpperCase();
@@ -371,6 +522,7 @@ function getStepTableData(masterSheetUrl, masterSheetName, stepsSheetName, heade
         baseNameLower.indexOf('date') !== -1 || baseNameLower.indexOf('timestamp') !== -1;
       columnNames.push(baseName);
       columnTypes.push(baseIsDate ? 'DATE' : baseType);
+      if (isAuditTrailField(baseName)) defaultHiddenCols.push(columnNames.length - 1);
     }
     visibleFields.forEach(function (f) {
       columnNames.push(f.name || ('Col ' + f.col));
@@ -378,8 +530,10 @@ function getStepTableData(masterSheetUrl, masterSheetName, stepsSheetName, heade
       // type configured for them (see isFieldConfigured()).
       var nameLower = (f.name || '').toLowerCase();
       var isDateField = f.type.toUpperCase().indexOf('DATE') !== -1 ||
-        nameLower.indexOf('planned') !== -1 || nameLower.indexOf('actual') !== -1;
+        nameLower.indexOf('planned') !== -1 || nameLower.indexOf('actual') !== -1 ||
+        nameLower.indexOf('modified at') !== -1;
       columnTypes.push(isDateField ? 'DATE' : f.type.toUpperCase());
+      if (isAuditTrailField(f.name)) defaultHiddenCols.push(columnNames.length - 1);
     });
 
     var lastRow = sheet.getLastRow();
@@ -399,6 +553,16 @@ function getStepTableData(masterSheetUrl, masterSheetName, stepsSheetName, heade
       var actualVal = currentPA.actualCol ? sheet.getRange(r, currentPA.actualCol).getValue() : '';
       var status = (actualVal !== '' && actualVal !== null) ? 'completed' : 'pending';
 
+      // Overdue: still pending (Actual empty) AND its Planned date/time has
+      // already passed. Never applies to completed rows.
+      var isOverdue = false;
+      if (status === 'pending' && currentPA.plannedCol) {
+        var plannedVal = sheet.getRange(r, currentPA.plannedCol).getValue();
+        if (plannedVal instanceof Date && plannedVal.getTime() < Date.now()) {
+          isOverdue = true;
+        }
+      }
+
       var rowValues = sheet.getRange(r, 1, 1, currentRange.endCol).getValues()[0];
       var cells = [];
       for (var bc2 = 0; bc2 < baseColCount; bc2++) {
@@ -408,10 +572,10 @@ function getStepTableData(masterSheetUrl, masterSheetName, stepsSheetName, heade
         cells.push(formatDateSafe(rowValues[f.col - 1]));
       });
 
-      rows.push({ row: r, status: status, cells: cells });
+      rows.push({ row: r, status: status, overdue: isOverdue, cells: cells });
     }
 
-    return { success: true, columns: columnNames, columnTypes: columnTypes, rows: rows };
+    return { success: true, columns: columnNames, columnTypes: columnTypes, defaultHiddenCols: defaultHiddenCols, rows: rows };
 
   } catch (e) {
     return { success: false, message: 'Error: ' + e.message };
@@ -448,6 +612,7 @@ function getStepFormFields(masterSheetUrl, masterSheetName, dropdownSheetName, h
     fields.forEach(function (f) {
       var nameLower = f.name.toLowerCase();
       if (nameLower.indexOf('actual') !== -1) return; // never shown
+      if (isAuditTrailField(f.name)) return; // "Modified By/At" are automatic - never a form question
 
       if (nameLower.indexOf('planned') !== -1) {
         // Always shown, always non-editable - regardless of whether Row 6
@@ -527,7 +692,7 @@ function getDropdownOptions(masterSheetUrl, dropdownSheetName, fieldName) {
  *
  * fileUploads: { fieldName: [ {base64, fileName, mimeType}, ... ], ... }
  */
-function submitStepData(masterSheetUrl, masterSheetName, stepsSheetName, header, stepName, rowNumber, formValues, fileUploads) {
+function submitStepData(masterSheetUrl, masterSheetName, stepsSheetName, header, stepName, rowNumber, formValues, fileUploads, submittedByUser) {
   try {
     var target = getTargetSheetInfo(masterSheetUrl, masterSheetName, header);
     if (!target) return { success: false, message: 'Target sheet info not found' };
@@ -542,9 +707,22 @@ function submitStepData(masterSheetUrl, masterSheetName, stepsSheetName, header,
     var fields = getStepFields(sheet, range);
     var pa = getPlannedActualCols(fields);
 
+    // Audit trail columns ("Modified By" / "Modified At") - OPTIONAL. If
+    // the sheet has columns with these exact names inside this Step's
+    // block (Row 7), they get written on every submit. If the sheet
+    // doesn't have them, nothing happens (fully backward compatible -
+    // no sheet changes required for this to work elsewhere).
+    var modifiedByCol = null, modifiedAtCol = null;
+    fields.forEach(function (f) {
+      var n = f.name.toLowerCase();
+      if (n.indexOf('modified by') !== -1) modifiedByCol = f.col;
+      if (n.indexOf('modified at') !== -1) modifiedAtCol = f.col;
+    });
+
     fields.forEach(function (f) {
       var nameLower = f.name.toLowerCase();
       if (nameLower.indexOf('planned') !== -1 || nameLower.indexOf('actual') !== -1) return;
+      if (nameLower.indexOf('modified by') !== -1 || nameLower.indexOf('modified at') !== -1) return; // written separately below
 
       if (f.type.toUpperCase().indexOf('FILE') !== -1) {
         var files = (fileUploads && fileUploads[f.name]) || [];
@@ -561,6 +739,8 @@ function submitStepData(masterSheetUrl, masterSheetName, stepsSheetName, header,
 
     var now = new Date();
     if (pa.actualCol) sheet.getRange(rowNumber, pa.actualCol).setValue(now);
+    if (modifiedAtCol) sheet.getRange(rowNumber, modifiedAtCol).setValue(now);
+    if (modifiedByCol && submittedByUser) sheet.getRange(rowNumber, modifiedByCol).setValue(submittedByUser);
 
     // Auto-compute next step's Planned date
     var masterSs = SpreadsheetApp.openByUrl(masterSheetUrl);
@@ -644,10 +824,14 @@ function wfGetStepForm(sheetUrl, masterSheet, dropdownSheet, header, stepName, r
   return getStepFormFields(sheetUrl, masterSheet, dropdownSheet, header, stepName, rowNumber);
 }
 
-function wfSubmitStep(sheetUrl, masterSheet, stepsSheet, header, stepName, rowNumber, formValues, fileUploads) {
-  return submitStepData(sheetUrl, masterSheet, stepsSheet, header, stepName, rowNumber, formValues, fileUploads);
+function wfSubmitStep(sheetUrl, masterSheet, stepsSheet, header, stepName, rowNumber, formValues, fileUploads, submittedByUser) {
+  return submitStepData(sheetUrl, masterSheet, stepsSheet, header, stepName, rowNumber, formValues, fileUploads, submittedByUser);
 }
 
 function wfGetStepTableData(sheetUrl, masterSheet, stepsSheet, header, stepName) {
   return getStepTableData(sheetUrl, masterSheet, stepsSheet, header, stepName);
+}
+
+function wfGetHomeSummary(sheetUrl, masterSheet, stepsSheet, userName) {
+  return getHomeSummary(sheetUrl, masterSheet, stepsSheet, userName);
 }

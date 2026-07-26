@@ -2,6 +2,13 @@
 <html>
 <head>
   <base target="_top">
+  <!-- Explicit viewport meta tag: REQUIRED here because this whole page is
+       injected via document.write() from Login.html (see goToDashboard()
+       in Login.html) - that REPLACES the entire document, including
+       whatever viewport meta tag Code.gs's doGet().addMetaTag() set on
+       the original page. Without this, mobile browsers render the
+       Dashboard at desktop width and the user sees a tiny zoomed-out page. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <?!= include('ThemeEngine') ?>
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
@@ -55,8 +62,16 @@
       </button>
     </div>
     <div class="sidebar-nav" id="sidebarNav">
-      <div style="text-align:center; padding:40px 20px; color:var(--text-muted); font-size:12px;">
-        Loading permissions...
+      <div class="nav-group">
+        <div class="nav-item nav-item-home active" id="navHomeItem" onclick="goHome()" title="Home">
+          <span class="material-icons-round">home</span>
+          <span>Home</span>
+        </div>
+      </div>
+      <div id="sidebarNavGroups">
+        <div style="text-align:center; padding:40px 20px; color:var(--text-muted); font-size:12px;">
+          Loading permissions...
+        </div>
       </div>
     </div>
     <div class="sidebar-footer">
@@ -69,11 +84,7 @@
 
   <!-- MAIN CONTENT -->
   <div class="main-content" id="mainContent">
-    <div class="welcome-section">
-      <span class="material-icons-round welcome-icon">dashboard</span>
-      <h2>Welcome to FMS Fashion</h2>
-      <p>Select a menu item from the sidebar to get started. Click the menu icon or press ESC to toggle.</p>
-    </div>
+    <div class="pending-loading">Loading your dashboard...</div>
   </div>
 
   <?!= include('Scripts') ?>
@@ -84,6 +95,7 @@
       if (typeof FMS_SESSION !== 'undefined') {
         document.getElementById('userDisplay').textContent = FMS_SESSION.userName;
         loadPermissions();
+        goHome(); // Home dashboard summary is the landing page after login
       }
       startLiveClock();
       startAutoRefresh();
