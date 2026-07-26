@@ -276,46 +276,52 @@ function goHome() {
 }
 
 function loadHomeDashboard() {
-  var main = document.getElementById('mainContent');
   var cached = FMS.homeSummaryCache;
 
   if (cached) {
     // Instant render from cache (same "remembered" pattern as the tables),
     // then silently refresh counts in the background.
-    renderHomeDashboard(cached);
+    renderHomeDashboard(cached, false);
     fetchHomeSummaryInBackground(false);
   } else {
-    main.innerHTML = '<div class="pending-loading">Loading your dashboard...</div>';
+    // NEVER show a "Loading..." spinner on Home - render the full page
+    // shell INSTANTLY with placeholder zero counts (isSkeleton=true shows
+    // "Loading latest data..." in place of a timestamp), then silently
+    // fetch the real numbers in the background and update in place the
+    // moment they arrive - so the page always feels already-loaded.
+    renderHomeDashboard({ success: true, totalPending: 0, totalCompleted: 0, groups: [] }, true);
     fetchHomeSummaryInBackground(true);
   }
 }
 
-function fetchHomeSummaryInBackground(showErrorsInline) {
+function fetchHomeSummaryInBackground(isFirstLoad) {
   google.script.run
     .withSuccessHandler(function(res) {
       if (!res.success) {
-        if (showErrorsInline) {
+        if (isFirstLoad) {
           document.getElementById('mainContent').innerHTML =
             '<div class="pending-empty"><span class="material-icons-round">error_outline</span>' + escapeHtml(res.message || 'Could not load dashboard') + '</div>';
         }
         return;
       }
+      var changed = JSON.stringify(res) !== JSON.stringify(FMS.homeSummaryCache);
       FMS.homeSummaryCache = res;
+      FMS.homeLastUpdated = new Date();
       // Only touch the DOM if the user is still on the Home page
       if (!FMS.currentHeader && !FMS.currentStep) {
-        renderHomeDashboard(res);
+        renderHomeDashboard(res, false, changed);
       }
-      setLastUpdatedNow(false);
+      setLastUpdatedNow(changed);
     })
     .withFailureHandler(function(err) {
-      if (showErrorsInline) {
+      if (isFirstLoad) {
         document.getElementById('mainContent').innerHTML = '<div class="pending-empty">' + escapeHtml(err.message) + '</div>';
       }
     })
     .wfGetHomeSummary(FMS_SESSION.sheetUrl, FMS_SESSION.masterSheet, FMS_SESSION.stepsSheet, FMS_SESSION.userName);
 }
 
-function renderHomeDashboard(res) {
+function renderHomeDashboard(res, isSkeleton, justUpdated) {
   var main = document.getElementById('mainContent');
   var now = new Date();
   var hour = now.getHours();
@@ -323,9 +329,19 @@ function renderHomeDashboard(res) {
 
   var html = '<div class="home-page">';
 
+  // "Last updated on ..." line at the TOP of the Home page itself - shows
+  // "Loading latest data..." only for the very first instant render
+  // (before any real fetch has ever completed), and the actual date/time
+  // of the most recent successful refresh after that (flashes green
+  // briefly whenever the numbers actually changed).
+  var lastUpdatedLine = isSkeleton
+    ? '<span class="home-last-updated-loading"><span class="material-icons-round sync-icon syncing">sync</span>Loading latest data...</span>'
+    : 'Last updated on ' + formatFmsDate(FMS.homeLastUpdated || new Date());
+
   html += '<div class="home-header">' +
     '<div><h2>' + greeting + ', ' + escapeHtml(FMS_SESSION.userName) + '</h2>' +
     '<p class="subtitle">Here\'s a summary of everything assigned to you.</p></div>' +
+    '<div class="home-last-updated' + (justUpdated ? ' updated-flash' : '') + '" id="homeLastUpdated">' + lastUpdatedLine + '</div>' +
     '</div>';
 
   var totalPending = res.totalPending || 0;
@@ -334,14 +350,20 @@ function renderHomeDashboard(res) {
   var pendingPct = grandTotal > 0 ? Math.round((totalPending / grandTotal) * 100) : 0;
   var completedPct = grandTotal > 0 ? Math.round((totalCompleted / grandTotal) * 100) : 0;
 
-  html += '<div class="home-stats-row">';
+  html += '<div class="home-stats-row' + (justUpdated ? ' stats-updated-flash' : '') + '">';
   html += homeStatCardHtml('Pending', totalPending, 'pending_actions', 'stat-pending', pendingPct);
   html += homeStatCardHtml('Completed', totalCompleted, 'task_alt', 'stat-completed', completedPct);
   html += homeStatCardHtml('Total Items', grandTotal, 'inventory_2', 'stat-total', null);
   html += '</div>';
 
   if (!res.groups || res.groups.length === 0) {
-    html += '<div class="pending-empty"><span class="material-icons-round">inbox</span>No steps assigned to you yet.</div>';
+    if (isSkeleton) {
+      // First-ever instant render, before we know if there are any groups
+      // yet - stay blank/neutral rather than claiming "no steps assigned".
+      html += '<div class="pending-loading">&nbsp;</div>';
+    } else {
+      html += '<div class="pending-empty"><span class="material-icons-round">inbox</span>No steps assigned to you yet.</div>';
+    }
   } else {
     res.groups.forEach(function(group) {
       html += '<div class="home-group">';
@@ -356,6 +378,15 @@ function renderHomeDashboard(res) {
 
   html += '</div>';
   main.innerHTML = html;
+
+  if (justUpdated) {
+    setTimeout(function() {
+      var el = document.getElementById('homeLastUpdated');
+      if (el) el.classList.remove('updated-flash');
+      var statsRow = document.querySelector('.home-stats-row.stats-updated-flash');
+      if (statsRow) statsRow.classList.remove('stats-updated-flash');
+    }, 2500);
+  }
 }
 
 function homeStatCardHtml(label, count, icon, extraClass, pct) {

@@ -668,9 +668,27 @@ tr.row-overdue td.col-serial { border-left: 3px solid var(--danger); }
 /* ===== HOME DASHBOARD (summary of all assigned Steps) ===== */
 .home-page { flex: 1; overflow-y: auto; padding-bottom: 10px; }
 
-.home-header { margin-bottom: 18px; }
+.home-header { margin-bottom: 18px; display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
 .home-header h2 { font-size: 20px; font-weight: 700; color: var(--text-primary); margin-bottom: 3px; }
 .home-header .subtitle { font-size: 12.5px; color: var(--text-secondary); }
+
+/* "Last updated on ..." line at the top of the Home page */
+.home-last-updated {
+  font-size: 11px; color: var(--text-muted); padding: 5px 12px; border-radius: 20px;
+  background: var(--bg-card); border: 1px solid var(--border); white-space: nowrap;
+  transition: color 0.3s ease, background-color 0.3s ease, border-color 0.3s ease;
+}
+.home-last-updated.updated-flash { color: var(--success); border-color: rgba(0,230,118,0.3); background: rgba(0,230,118,0.08); }
+.home-last-updated-loading { display: flex; align-items: center; gap: 5px; }
+.home-last-updated-loading .sync-icon { font-size: 13px !important; }
+
+/* Brief highlight flash on the stat cards row when new numbers arrive
+   from a background refresh (matches the "Last Updated" flash). */
+.home-stats-row.stats-updated-flash .home-stat-card { animation: statFlash 2.5s ease; }
+@keyframes statFlash {
+  0% { box-shadow: 0 0 0 2px rgba(0,230,118,0.5); }
+  100% { box-shadow: none; }
+}
 
 .home-stats-row { display: flex; gap: 14px; margin-bottom: 22px; flex-wrap: wrap; }
 .home-stat-card {
