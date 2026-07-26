@@ -300,7 +300,13 @@
   };
 
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeDrawer(); });
-  document.addEventListener('DOMContentLoaded', function () { buildDrawer(); });
+
+  // NOTE: The drawer is intentionally NOT auto-built on DOMContentLoaded.
+  // It is built lazily, only when FMSTheme.openDrawer() is actually called
+  // (e.g. from the Dashboard's topbar/sidebar trigger). This keeps pages
+  // that include ThemeEngine.html purely for FOUC-safe color/mode variables
+  // (like the Login page, which has no Appearance trigger and no drawer
+  // CSS loaded) from ever showing an unstyled drawer box.
 
 })();
 </script>
