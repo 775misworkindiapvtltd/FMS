@@ -95,14 +95,27 @@ html {
   transition: background-color 0.25s ease, border-color 0.25s ease, color 0.25s ease, box-shadow 0.25s ease, transform 0.2s ease;
 }
 
+/* CRITICAL LAYOUT RULE: the OUTER page (html/body) must NEVER scroll.
+   The topbar and sidebar are position:fixed relative to the viewport -
+   if the body were allowed to overflow/scroll (e.g. because some inner
+   content grew slightly taller than expected), the fixed header/sidebar
+   could appear to "disappear" or judder during that scroll on some
+   mobile browsers / inside the Apps Script iframe. Locking html+body to
+   exactly 100% height with overflow:hidden makes this structurally
+   impossible - ALL scrolling is forced into the designated inner
+   containers below (.table-scroll-wrap, .sidebar-nav, .home-page,
+   .modal-body), which is exactly what should scroll anyway. */
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
+
 body {
   font-family: 'Poppins', sans-serif;
   background: var(--bg-primary);
   color: var(--text-primary);
   font-size: var(--font-size-base);
-  min-height: 100vh;
   transition: background var(--transition), color var(--transition);
-  overflow-x: hidden;
 }
 
 /* Font Size Classes */
