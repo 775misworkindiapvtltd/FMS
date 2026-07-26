@@ -707,6 +707,8 @@ function renderDataTable(headerName, stepName) {
       '<span class="material-icons-round" style="font-size:13px;">warning</span>Overdue <span class="status-tab-count">' + overdueCount + '</span></button>';
   }
   html += '</div>';
+  html += '<button type="button" class="reset-filters-btn" onclick="resetAllFilters()" title="Reset all filters back to default">' +
+    '<span class="material-icons-round">restart_alt</span>Reset Filters</button>';
   html += '<div class="table-search"><span class="material-icons-round">search</span>' +
     '<input type="text" id="tableGlobalSearch" placeholder="Search all columns..." value="' + escapeAttr(t.globalSearch) + '" oninput="onGlobalSearch(this.value)"></div>';
   html += '<div class="table-toolbar-right">';
@@ -728,6 +730,13 @@ function renderDataTable(headerName, stepName) {
   // resizing ONE column never causes any other column to grow/shrink to
   // compensate - the total table width is simply the sum of all column
   // widths, and leftover space (if any) stays blank after the last column.
+  //
+  // Per-column filtering is now ICON-DRIVEN instead of a permanent search
+  // row under every header: a small icon sits right after the column
+  // name (search icon for text columns, calendar icon for Date/Time
+  // columns). Clicking it opens a small popover below that icon to type
+  // a search term (or pick a date range) - no more a whole extra table
+  // row of search boxes cluttering the header (per user request).
   var DEFAULT_COL_WIDTH = 150;
   html += '<div class="table-scroll-wrap"><table class="data-table" id="fmsDataTable"><thead>';
   html += '<tr>';
@@ -737,33 +746,22 @@ function renderDataTable(headerName, stepName) {
     var w = t.colWidths[idx] || DEFAULT_COL_WIDTH;
     var style = ' style="width:' + w + 'px; min-width:' + w + 'px; max-width:' + w + 'px;"';
     var dividerClass = (idx === plannedColIdx) ? ' col-before-planned' : '';
+    var isDate = isDateColumn(idx);
+    var activeFilter = isDate
+      ? !!(t.colSearch[idx] && (t.colSearch[idx].start || t.colSearch[idx].end))
+      : !!t.colSearch[idx];
+    var filterIcon = isDate ? 'date_range' : 'search';
+    var filterAction = isDate ? 'openDateRangePicker(event,' + idx + ')' : 'openColumnTextFilter(event,' + idx + ')';
     html += '<th data-col="' + idx + '" class="' + dividerClass.trim() + '"' + style + '>' +
+      '<div class="th-inner">' +
       '<span class="th-label" onclick="onSortColumn(' + idx + ')">' + escapeHtml(t.columns[idx]) + arrow + '</span>' +
+      '<button type="button" class="col-filter-btn' + (activeFilter ? ' active' : '') + '" onclick="' + filterAction + '" title="Filter this column">' +
+      '<span class="material-icons-round">' + filterIcon + '</span></button>' +
+      '</div>' +
       '<span class="col-resize-handle" onmousedown="startColResize(event,' + idx + ')"></span>' +
       '</th>';
   });
   html += '<th class="col-action">Action</th>';
-  html += '</tr><tr class="col-search-row">';
-  html += '<th></th>';
-  visibleIdx.forEach(function(idx) {
-    var dividerClass = (idx === plannedColIdx) ? ' col-before-planned' : '';
-    if (isDateColumn(idx)) {
-      // Any column holding a Date/Time value (Planned, Actual, Timestamp,
-      // or any Row6 "DATE" type) gets the dual-calendar date-RANGE picker
-      // in its search box instead of a plain text box.
-      var range = t.colSearch[idx];
-      var label = formatDateRangeLabel(range);
-      html += '<th class="' + dividerClass.trim() + '"><div class="date-search-wrap">' +
-        '<button type="button" class="date-range-trigger" onclick="openDateRangePicker(event, ' + idx + ')">' +
-        '<span class="material-icons-round">date_range</span><span class="date-range-trigger-label">' + escapeHtml(label || 'Any date') + '</span>' +
-        '</button>' +
-        (range ? '<span class="date-search-clear material-icons-round" onclick="onColumnSearch(' + idx + ', null)">close</span>' : '') +
-        '</div></th>';
-    } else {
-      html += '<th class="' + dividerClass.trim() + '"><input type="text" placeholder="Search..." value="' + escapeAttr(t.colSearch[idx] || '') + '" oninput="onColumnSearch(' + idx + ', this.value)"></th>';
-    }
-  });
-  html += '<th></th>';
   html += '</tr></thead><tbody>';
 
   if (pageRows.length === 0) {
@@ -938,13 +936,97 @@ function onColumnSearch(colIdx, value) {
   FMS.table.colSearch[colIdx] = value;
   FMS.table.page = 1;
   renderDataTable(FMS.currentHeader, FMS.currentStep);
-  var inputs = document.querySelectorAll('.col-search-row input');
-  var target = inputs[colIdx];
-  if (target && typeof target.setSelectionRange === 'function') {
-    target.focus();
-    target.setSelectionRange(target.value.length, target.value.length);
-  }
+  // NOTE: no refocus-the-input logic needed here anymore - the text/date
+  // filter popovers now live at the document.body level (see
+  // ensureTextFilterPopoverExists()/ensureDateRangePickerExists()), so
+  // re-rendering the table's innerHTML never touches or unmounts them;
+  // their input never loses focus in the first place.
 }
+
+/**
+ * Resets every active filter back to the page's original defaults:
+ * clears the global search box, every per-column filter (text search AND
+ * date ranges), any active sort, jumps back to page 1, and switches the
+ * status tab back to "Pending" (the tab shown when a step is first
+ * opened). Column visibility/width preferences are NOT touched - those
+ * aren't filters, they're a display preference.
+ */
+function resetAllFilters() {
+  var t = FMS.table;
+  t.globalSearch = '';
+  t.colSearch = {};
+  t.sortCol = null;
+  t.sortDir = 'asc';
+  t.filterStatus = 'pending';
+  t.page = 1;
+  closeColumnTextFilter();
+  closeDateRangePicker();
+  renderDataTable(FMS.currentHeader, FMS.currentStep);
+}
+
+// ================================================================
+// PER-COLUMN TEXT FILTER POPOVER (icon-triggered, replaces the old
+// permanent search row under every header)
+// ================================================================
+FMS.textFilterPopover = { open: false, colIdx: null };
+
+function ensureTextFilterPopoverExists() {
+  if (document.getElementById('fmsTextFilterPopover')) return;
+  var html =
+    '<div class="text-filter-overlay" id="fmsTextFilterOverlay" onclick="closeColumnTextFilter()"></div>' +
+    '<div class="text-filter-popover" id="fmsTextFilterPopover">' +
+      '<span class="material-icons-round">search</span>' +
+      '<input type="text" id="fmsTextFilterInput" placeholder="Type to search..." oninput="onTextFilterInput(this.value)">' +
+      '<span class="text-filter-clear material-icons-round" id="fmsTextFilterClear" onclick="clearColumnTextFilter()">close</span>' +
+    '</div>';
+  document.body.insertAdjacentHTML('beforeend', html);
+  document.getElementById('fmsTextFilterPopover').addEventListener('click', function(e) { e.stopPropagation(); });
+}
+
+function openColumnTextFilter(e, idx) {
+  e.stopPropagation();
+  ensureTextFilterPopoverExists();
+  var p = FMS.textFilterPopover;
+  p.open = true;
+  p.colIdx = idx;
+
+  var overlay = document.getElementById('fmsTextFilterOverlay');
+  var popover = document.getElementById('fmsTextFilterPopover');
+  var input = document.getElementById('fmsTextFilterInput');
+  input.value = FMS.table.colSearch[idx] || '';
+  overlay.classList.add('active');
+  popover.classList.add('open');
+
+  var btn = e.target.closest ? e.target.closest('.col-filter-btn') : null;
+  if (btn && btn.getBoundingClientRect) {
+    var rect = btn.getBoundingClientRect();
+    popover.style.top = (rect.bottom + 6) + 'px';
+    popover.style.left = Math.max(8, Math.min(rect.left - 90, window.innerWidth - 230)) + 'px';
+  }
+  setTimeout(function() { input.focus(); }, 0);
+}
+
+function closeColumnTextFilter() {
+  var popover = document.getElementById('fmsTextFilterPopover');
+  var overlay = document.getElementById('fmsTextFilterOverlay');
+  if (popover) popover.classList.remove('open');
+  if (overlay) overlay.classList.remove('active');
+  FMS.textFilterPopover.open = false;
+}
+
+function onTextFilterInput(value) {
+  onColumnSearch(FMS.textFilterPopover.colIdx, value);
+}
+
+function clearColumnTextFilter() {
+  var input = document.getElementById('fmsTextFilterInput');
+  if (input) input.value = '';
+  onColumnSearch(FMS.textFilterPopover.colIdx, '');
+}
+
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape' && FMS.textFilterPopover && FMS.textFilterPopover.open) closeColumnTextFilter();
+});
 
 // ================================================================
 // DATE-RANGE PICKER (dual calendar + presets, matches MerTraCode UI)
@@ -1026,7 +1108,7 @@ function openDateRangePicker(e, colIdx) {
   picker.classList.add('open');
 
   // Position the picker near the trigger button that was clicked
-  var btn = e.target.closest ? e.target.closest('.date-range-trigger') : null;
+  var btn = e.target.closest ? e.target.closest('.col-filter-btn') : null;
   if (btn && btn.getBoundingClientRect) {
     var rect = btn.getBoundingClientRect();
     picker.style.top = (rect.bottom + 6) + 'px';

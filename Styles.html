@@ -574,12 +574,29 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
   user-select: none; z-index: 2; overflow: hidden; vertical-align: top;
   transition: background-color 0.35s ease, border-color 0.35s ease;
 }
+/* Column name + filter icon sit side by side on ONE line inside the
+   header cell - no more permanent search-row underneath every column
+   (per user request). Clicking the icon opens a small popover instead. */
+.th-inner { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
 .data-table thead th .th-label {
-  cursor: pointer; display: block; white-space: normal;
-  overflow-wrap: break-word; word-break: break-word; line-height: 1.3;
+  cursor: pointer; white-space: normal;
+  overflow-wrap: break-word; word-break: break-word; line-height: 1.3; flex: 1;
 }
 .data-table thead th .th-label:hover { color: var(--accent); }
 .data-table thead th.col-action, .data-table thead th.col-serial { cursor: default; white-space: nowrap; }
+
+/* Small filter icon button next to each column name (search icon for
+   text columns, calendar icon for Date/Time columns). Turns accent-
+   colored once that column has an active filter applied. */
+.col-filter-btn {
+  flex-shrink: 0; width: 20px; height: 20px; border-radius: 5px; border: none;
+  background: transparent; color: var(--text-muted); cursor: pointer;
+  display: flex; align-items: center; justify-content: center; padding: 0;
+  transition: var(--transition);
+}
+.col-filter-btn:hover { background: var(--color-primary-glow); color: var(--accent); }
+.col-filter-btn .material-icons-round { font-size: 14px; }
+.col-filter-btn.active { color: var(--color-primary); background: var(--color-primary-glow); }
 
 .col-resize-handle {
   position: absolute; top: 0; right: 0; bottom: 0; width: 6px; cursor: col-resize;
@@ -594,14 +611,6 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
    columns (Planned/Actual/fill-in fields). Runs the full height of the
    table (every header row + every data row), explicitly requested. */
 .col-before-planned { border-left: 2px solid var(--success) !important; }
-
-.col-search-row th { top: 33px; background: var(--color-primary-glow); padding: 4px 6px; z-index: 1; }
-.col-search-row input {
-  width: 100%; padding: 5px 7px; border-radius: 6px; border: 1px solid var(--border);
-  background: var(--bg-card); color: var(--text-primary); font-family: 'Poppins', sans-serif;
-  font-size: calc(10.5px * var(--content-font-scale)); outline: none; box-sizing: border-box;
-}
-.col-search-row input:focus { border-color: var(--accent); }
 
 .data-table tbody td {
   padding: 6px 10px; border-bottom: 1px solid var(--border); color: var(--text-secondary);
@@ -750,23 +759,41 @@ tr.row-overdue td.col-serial { border-left: 3px solid var(--danger); }
 .home-step-progress-fill { height: 100%; background: var(--success); border-radius: 4px; transition: width 0.4s ease; }
 .home-step-card-error { font-size: 10.5px; color: var(--danger); }
 
-/* ===== DATE-RANGE PICKER (dual calendar + presets) ===== */
-.date-search-wrap { position: relative; display: flex; align-items: center; }
-.date-range-trigger {
-  display: flex; align-items: center; gap: 5px; width: 100%; padding: 5px 7px;
-  border-radius: 6px; border: 1px solid var(--border); background: var(--bg-card);
-  color: var(--text-primary); font-family: 'Poppins', sans-serif;
-  font-size: calc(10.5px * var(--content-font-scale)); cursor: pointer; text-align: left;
+/* ===== RESET FILTERS BUTTON (top of the toolbar line) ===== */
+.reset-filters-btn {
+  display: flex; align-items: center; gap: 5px; padding: 6px 12px; flex-shrink: 0;
+  border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--bg-card);
+  color: var(--text-secondary); cursor: pointer; font-family: 'Poppins', sans-serif;
+  font-size: calc(11px * var(--content-font-scale)); font-weight: 500; white-space: nowrap;
+  transition: var(--transition);
 }
-.date-range-trigger:hover { border-color: var(--accent); }
-.date-range-trigger .material-icons-round { font-size: 13px !important; color: var(--text-muted); flex-shrink: 0; }
-.date-range-trigger-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.date-search-clear {
-  position: absolute; right: 4px; font-size: 13px !important; color: var(--text-muted);
-  cursor: pointer; background: var(--bg-card);
-}
-.date-search-clear:hover { color: var(--danger); }
+.reset-filters-btn:hover { border-color: var(--danger); color: var(--danger); }
+.reset-filters-btn .material-icons-round { font-size: 15px; }
 
+/* ===== PER-COLUMN TEXT FILTER POPOVER (icon-triggered) ===== */
+.text-filter-overlay {
+  position: fixed; inset: 0; background: transparent; z-index: 3500;
+  opacity: 0; visibility: hidden;
+}
+.text-filter-overlay.active { opacity: 1; visibility: visible; }
+
+.text-filter-popover {
+  position: fixed; z-index: 3501; display: flex; align-items: center; gap: 6px;
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg); padding: 8px 10px; width: 220px;
+  opacity: 0; visibility: hidden; transform: translateY(-6px);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.text-filter-popover.open { opacity: 1; visibility: visible; transform: translateY(0); }
+.text-filter-popover .material-icons-round { font-size: 16px; color: var(--text-muted); flex-shrink: 0; }
+.text-filter-popover input {
+  flex: 1; border: none; background: transparent; outline: none; color: var(--text-primary);
+  font-family: 'Poppins', sans-serif; font-size: 12.5px; min-width: 0;
+}
+.text-filter-clear { cursor: pointer; }
+.text-filter-clear:hover { color: var(--danger); }
+
+/* ===== DATE-RANGE PICKER (dual calendar + presets) ===== */
 .date-range-overlay {
   position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 3500;
   opacity: 0; visibility: hidden; transition: opacity 0.15s ease;
