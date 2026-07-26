@@ -17,6 +17,13 @@
   --bg-card: rgba(255,255,255,0.03);
   --bg-card-hover: rgba(255,255,255,0.06);
   --bg-surface: var(--bg-secondary);
+  /* Table header background: theme-colored (mixed with the active accent)
+     but always fully OPAQUE - computed by ThemeEngine.html's
+     computeHeaderBg() whenever the color scheme or display mode changes.
+     This fallback value only matters for the instant before that JS runs
+     (defensive; ThemeEngine is FOUC-safe and runs synchronously first, so
+     in practice this is basically never visible). */
+  --table-header-bg: #24243d;
   --text-primary: #ffffff;
   --text-main: var(--text-primary);
   --text-secondary: rgba(255,255,255,0.6);
@@ -78,6 +85,7 @@ body.font-large #mainContent { --content-font-scale: 1.25; }
   --border-hover: rgba(0,0,0,0.15);
   --shadow: 0 4px 20px rgba(0,0,0,0.08);
   --shadow-lg: 0 20px 60px rgba(0,0,0,0.12);
+  --table-header-bg: #f0ecfd;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -617,25 +625,31 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
    user request) - the .table-scroll-wrap wrapper scrolls horizontally
    when the total is wider than the viewport instead. */
 .data-table { width: auto; border-collapse: collapse; font-size: calc(12px * var(--content-font-scale)); white-space: normal; table-layout: fixed; }
-/* IMPORTANT: this header background must be a fully OPAQUE color, never
+/* Header background now uses --table-header-bg - a color computed by
+   ThemeEngine.html's computeHeaderBg() that mixes the CURRENT accent
+   color into a solid surface tone, so the header visibly follows
+   whichever of the 37+ color schemes / light-dark mode is active.
+   IMPORTANT: --table-header-bg is ALWAYS a fully OPAQUE hex color, never
    a translucent rgba() token like --color-primary-glow. This is a
    position:sticky header - while scrolling the table body vertically,
-   any transparency here lets the data rows scrolling underneath show
-   through and visually overlap/"ghost" with the header text (exactly
-   the bug reported: row text bleeding through the header row). Solid
-   --bg-surface (with a light accent-tinted border instead of a tinted
-   fill) keeps the visual "this header is accented" cue without ever
-   letting content bleed through. */
+   any transparency here would let the data rows scrolling underneath
+   show through and visually overlap/"ghost" with the header text (a bug
+   already fixed once before - do not regress it). Content is also
+   vertically centered (top AND bottom) inside the header cell, instead
+   of top-aligned, per user request. */
 .data-table thead th {
-  position: sticky; top: 0; background: var(--bg-surface); color: var(--text-primary);
+  position: sticky; top: 0; background: var(--table-header-bg); color: var(--text-primary);
   font-weight: 700; text-align: left; padding: 8px 10px; border-bottom: 2px solid var(--color-primary);
-  user-select: none; z-index: 2; overflow: hidden; vertical-align: top;
+  user-select: none; z-index: 2; overflow: hidden; vertical-align: middle;
   transition: background-color 0.35s ease, border-color 0.35s ease;
 }
 /* Column name + filter icon sit side by side on ONE line inside the
    header cell - no more permanent search-row underneath every column
-   (per user request). Clicking the icon opens a small popover instead. */
-.th-inner { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+   (per user request). Clicking the icon opens a small popover instead.
+   align-items:center here handles the vertical centering for the actual
+   flex content (label + filter icon), matching the cell's own
+   vertical-align:middle above. */
+.th-inner { display: flex; align-items: center; justify-content: space-between; gap: 4px; height: 100%; }
 .data-table thead th .th-label {
   cursor: pointer; white-space: normal;
   overflow-wrap: break-word; word-break: break-word; line-height: 1.3; flex: 1;

@@ -58,6 +58,12 @@
 
   var DEFAULT_SCHEME = 'indigo-wave'; // closest match to FMS's original #667eea/#764ba2 accent
 
+  // Solid (fully opaque) surface colors per display mode - MUST mirror
+  // --bg-secondary in Styles.html's :root and [data-theme="light"] blocks
+  // exactly, since these are mixed with the accent color below to build
+  // a theme-colored but still 100% opaque table-header background.
+  var SURFACE_HEX = { dark: '#1a1a2e', light: '#ffffff' };
+
   // ---------- Color math helpers ----------
   function hexToRgb(hex) {
     hex = String(hex).replace('#', '');
@@ -118,12 +124,38 @@
     } catch (e) { return 'dark'; }
   }
 
+  /**
+   * The sticky table-header background must be BOTH theme-colored (tinted
+   * with the active accent, per user request) AND fully opaque (a
+   * transparent header lets the scrolling rows underneath bleed/ghost
+   * through the header text - a bug already fixed once before). Mixing a
+   * small amount of the accent color into the solid surface color gives
+   * a subtle, theme-aware tint while staying 100% opaque - safe for a
+   * position:sticky element regardless of which of the 37+ palettes or
+   * light/dark mode is active.
+   */
+  function computeHeaderBg(accentHex) {
+    var resolved = document.documentElement.getAttribute('data-theme') || 'dark';
+    var surface = SURFACE_HEX[resolved] || SURFACE_HEX.dark;
+    // Light mode needs a stronger mix % to be visible against a white
+    // surface; dark mode needs less to avoid looking too saturated.
+    var weight = resolved === 'light' ? 0.14 : 0.22;
+    return mixHex(surface, accentHex, weight);
+  }
+
   function applyDisplayMode(mode, persist) {
     var resolved = mode === 'system' ? resolveSystemMode() : mode;
     document.documentElement.setAttribute('data-theme', resolved);
     document.documentElement.setAttribute('data-display-mode', mode);
     if (document.body) document.body.setAttribute('data-theme', resolved); // legacy mirror
     if (persist !== false) safeSet(STORAGE_MODE_KEY, mode);
+    // Header tint depends on light/dark surface color too - recompute it
+    // whenever the display mode changes (using whichever accent is
+    // currently active), not just when the color scheme changes.
+    var currentAccent = document.documentElement.style.getPropertyValue('--color-primary');
+    if (currentAccent) {
+      document.documentElement.style.setProperty('--table-header-bg', computeHeaderBg(currentAccent.trim()));
+    }
     syncModeUI(mode);
   }
 
@@ -139,6 +171,9 @@
     rootStyle.setProperty('--color-primary-rgb', rgb.r + ',' + rgb.g + ',' + rgb.b);
     rootStyle.setProperty('--color-primary-glow', toRgba(palette.primary, 0.14));
     rootStyle.setProperty('--color-primary-glow-strong', toRgba(palette.primary, 0.32));
+    // Table header background: theme-colored (per user request) but ALWAYS
+    // a solid opaque hex - never the translucent --color-primary-glow.
+    rootStyle.setProperty('--table-header-bg', computeHeaderBg(palette.primary));
 
     document.documentElement.setAttribute('data-color-scheme', palette.id);
 
