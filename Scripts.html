@@ -231,8 +231,24 @@ FMS.table = {
   sortCol: null,
   sortDir: 'asc',
   page: 1,
-  pageSize: 50
+  pageSize: 50,
+  colWidths: {},               // colIndex -> px width (resizable columns)
+  hiddenCols: {},               // colIndex -> true if hidden
+  columnPanelOpen: false,
+  justResized: false,
+  cacheKey: null
 };
+
+// Remembers column width/visibility choices PER STEP (like the data cache),
+// so switching steps and coming back keeps your resize/hide preferences.
+FMS.columnPrefs = {}; // cacheKey -> { colWidths: {}, hiddenCols: {} }
+
+function getColumnPrefs(cacheKey) {
+  if (!FMS.columnPrefs[cacheKey]) {
+    FMS.columnPrefs[cacheKey] = { colWidths: {}, hiddenCols: {} };
+  }
+  return FMS.columnPrefs[cacheKey];
+}
 
 /**
  * Loads a Step's table. If we already have cached data for this exact
@@ -251,29 +267,32 @@ function loadStepTable(headerName, stepName) {
   FMS.table.colSearch = {};
   FMS.table.sortCol = null;
   FMS.table.page = 1;
+  FMS.table.cacheKey = cacheKey;
+  FMS.table.columnPanelOpen = false;
+  var prefs = getColumnPrefs(cacheKey);
+  FMS.table.colWidths = prefs.colWidths;
+  FMS.table.hiddenCols = prefs.hiddenCols;
+
+  // Compact page-title strip (step name + header as a small breadcrumb,
+  // not a big heading) so more vertical space goes to the actual data.
+  var pageShell =
+    '<div class="table-page">' +
+    '<div class="table-page-title"><span class="material-icons-round">assignment</span>' +
+    '<strong>' + escapeHtml(stepName) + '</strong><span class="breadcrumb-sep">/</span>' + escapeHtml(headerName) + '</div>' +
+    '<div id="tableContainer"></div>' +
+    '</div>';
 
   if (cached) {
     // Instant render from cache - no spinner, no "circle ghoomna"
-    main.innerHTML =
-      '<div class="content-page table-page">' +
-      '<div class="table-page-header">' +
-      '<div><h3>' + escapeHtml(stepName) + '</h3><p class="subtitle">' + escapeHtml(headerName) + '</p></div>' +
-      '</div>' +
-      '<div id="tableContainer"></div>' +
-      '</div>';
+    main.innerHTML = pageShell;
     FMS.table.columns = cached.columns;
     FMS.table.rows = cached.rows;
     renderDataTable(headerName, stepName);
     fetchStepTableInBackground(headerName, stepName, cacheKey, false);
   } else {
     // First time opening this step - show loader once
-    main.innerHTML =
-      '<div class="content-page table-page">' +
-      '<div class="table-page-header">' +
-      '<div><h3>' + escapeHtml(stepName) + '</h3><p class="subtitle">' + escapeHtml(headerName) + '</p></div>' +
-      '</div>' +
-      '<div id="tableContainer"><div class="pending-loading">Loading data...</div></div>' +
-      '</div>';
+    main.innerHTML = pageShell;
+    document.getElementById('tableContainer').innerHTML = '<div class="pending-loading">Loading data...</div>';
     fetchStepTableInBackground(headerName, stepName, cacheKey, true);
   }
 }
@@ -345,6 +364,25 @@ function getFilteredSortedRows() {
   return rows;
 }
 
+// Detects a bare http(s) URL and renders it as a short "Click Here" link
+// instead of dumping the raw URL into the cell (per user request).
+var URL_PATTERN = /^https?:\/\/\S+$/i;
+
+function renderCellValue(rawValue) {
+  var value = String(rawValue == null ? '' : rawValue).trim();
+  if (URL_PATTERN.test(value)) {
+    return '<a href="' + escapeAttr(value) + '" target="_blank" rel="noopener noreferrer" class="cell-link" onclick="event.stopPropagation()">Click Here</a>';
+  }
+  // Also handle cells with MULTIPLE comma/space separated URLs (e.g. multi-file uploads)
+  var parts = value.split(/,\s*/);
+  if (parts.length > 1 && parts.every(function(p) { return URL_PATTERN.test(p.trim()); })) {
+    return parts.map(function(p, i) {
+      return '<a href="' + escapeAttr(p.trim()) + '" target="_blank" rel="noopener noreferrer" class="cell-link" onclick="event.stopPropagation()">Click Here' + (parts.length > 1 ? ' ' + (i + 1) : '') + '</a>';
+    }).join(', ');
+  }
+  return escapeHtml(value);
+}
+
 function renderDataTable(headerName, stepName) {
   var t = FMS.table;
   var allRows = t.rows;
@@ -357,6 +395,9 @@ function renderDataTable(headerName, stepName) {
   var startIdx = (t.page - 1) * t.pageSize;
   var pageRows = filtered.slice(startIdx, startIdx + t.pageSize);
 
+  var visibleIdx = [];
+  t.columns.forEach(function(col, idx) { if (!t.hiddenCols[idx]) visibleIdx.push(idx); });
+
   var html = '';
 
   // ---- Status filter tabs ----
@@ -366,38 +407,52 @@ function renderDataTable(headerName, stepName) {
   html += statusTabHtml('all', 'All', allRows.length, t.filterStatus);
   html += '</div>';
 
-  // ---- Global search + page size ----
+  // ---- Global search + column visibility toggle + page size ----
   html += '<div class="table-toolbar">';
   html += '<div class="table-search"><span class="material-icons-round">search</span>' +
     '<input type="text" id="tableGlobalSearch" placeholder="Search all columns..." value="' + escapeAttr(t.globalSearch) + '" oninput="onGlobalSearch(this.value)"></div>';
+  html += '<div class="table-toolbar-right">';
+  html += '<div class="column-toggle-wrap">' +
+    '<button type="button" class="icon-btn" title="Show/Hide Columns" onclick="toggleColumnPanel(event)"><span class="material-icons-round">view_column</span></button>' +
+    renderColumnPanel(t) +
+    '</div>';
   html += '<div class="page-size-select">Show ' +
     '<select id="pageSizeSelect" onchange="onPageSizeChange(this.value)">' +
     [50, 100, 500, 1000].map(function(n) { return '<option value="' + n + '"' + (t.pageSize === n ? ' selected' : '') + '>' + n + '</option>'; }).join('') +
     '</select> entries</div>';
   html += '</div>';
+  html += '</div>';
 
   // ---- Table ----
-  html += '<div class="table-scroll-wrap"><table class="data-table"><thead>';
+  html += '<div class="table-scroll-wrap"><table class="data-table" id="fmsDataTable"><thead>';
   html += '<tr>';
-  t.columns.forEach(function(col, idx) {
+  html += '<th class="col-serial">S.No</th>';
+  visibleIdx.forEach(function(idx) {
     var arrow = t.sortCol === idx ? (t.sortDir === 'asc' ? ' ▲' : ' ▼') : '';
-    html += '<th onclick="onSortColumn(' + idx + ')">' + escapeHtml(col) + arrow + '</th>';
+    var w = t.colWidths[idx];
+    var style = w ? ' style="width:' + w + 'px; min-width:' + w + 'px; max-width:' + w + 'px;"' : '';
+    html += '<th data-col="' + idx + '"' + style + '>' +
+      '<span class="th-label" onclick="onSortColumn(' + idx + ')">' + escapeHtml(t.columns[idx]) + arrow + '</span>' +
+      '<span class="col-resize-handle" onmousedown="startColResize(event,' + idx + ')"></span>' +
+      '</th>';
   });
   html += '<th class="col-action">Action</th>';
   html += '</tr><tr class="col-search-row">';
-  t.columns.forEach(function(col, idx) {
+  html += '<th></th>';
+  visibleIdx.forEach(function(idx) {
     html += '<th><input type="text" placeholder="Search..." value="' + escapeAttr(t.colSearch[idx] || '') + '" oninput="onColumnSearch(' + idx + ', this.value)"></th>';
   });
   html += '<th></th>';
   html += '</tr></thead><tbody>';
 
   if (pageRows.length === 0) {
-    html += '<tr><td colspan="' + (t.columns.length + 1) + '" class="table-empty-cell">No matching records found.</td></tr>';
+    html += '<tr><td colspan="' + (visibleIdx.length + 2) + '" class="table-empty-cell">No matching records found.</td></tr>';
   } else {
-    pageRows.forEach(function(r) {
+    pageRows.forEach(function(r, i) {
       html += '<tr>';
-      r.cells.forEach(function(cell) {
-        html += '<td>' + escapeHtml(String(cell || '')) + '</td>';
+      html += '<td class="col-serial">' + (startIdx + i + 1) + '</td>';
+      visibleIdx.forEach(function(idx) {
+        html += '<td>' + renderCellValue(r.cells[idx]) + '</td>';
       });
       html += '<td class="col-action">';
       if (r.status === 'pending') {
@@ -421,6 +476,104 @@ function renderDataTable(headerName, stepName) {
   html += '</div></div>';
 
   document.getElementById('tableContainer').innerHTML = html;
+}
+
+// ===== COLUMN SHOW/HIDE PANEL =====
+function renderColumnPanel(t) {
+  if (!t.columnPanelOpen) return '<div class="column-panel" id="columnPanel"></div>';
+  var html = '<div class="column-panel open" id="columnPanel" onclick="event.stopPropagation()">';
+  html += '<div class="column-panel-title">Show / Hide Columns</div>';
+  t.columns.forEach(function(col, idx) {
+    var checked = !t.hiddenCols[idx] ? ' checked' : '';
+    html += '<label class="column-panel-item">' +
+      '<input type="checkbox"' + checked + ' onchange="toggleColumnVisibility(' + idx + ', this.checked)">' +
+      '<span>' + escapeHtml(col) + '</span>' +
+      '</label>';
+  });
+  html += '<button type="button" class="column-panel-reset" onclick="resetAllColumns()">Show All</button>';
+  html += '</div>';
+  return html;
+}
+
+function toggleColumnPanel(e) {
+  e.stopPropagation();
+  FMS.table.columnPanelOpen = !FMS.table.columnPanelOpen;
+  renderDataTable(FMS.currentHeader, FMS.currentStep);
+}
+
+function toggleColumnVisibility(idx, isVisible) {
+  var t = FMS.table;
+  if (isVisible) {
+    delete t.hiddenCols[idx];
+  } else {
+    // Never allow hiding every single column (keep at least 1 visible)
+    var visibleCount = t.columns.filter(function(c, i) { return !t.hiddenCols[i]; }).length;
+    if (visibleCount <= 1) return;
+    t.hiddenCols[idx] = true;
+  }
+  persistColumnPrefs();
+  t.columnPanelOpen = true; // keep panel open while toggling checkboxes
+  renderDataTable(FMS.currentHeader, FMS.currentStep);
+}
+
+function resetAllColumns() {
+  FMS.table.hiddenCols = {};
+  persistColumnPrefs();
+  renderDataTable(FMS.currentHeader, FMS.currentStep);
+}
+
+function persistColumnPrefs() {
+  if (!FMS.table.cacheKey) return;
+  var prefs = getColumnPrefs(FMS.table.cacheKey);
+  prefs.colWidths = FMS.table.colWidths;
+  prefs.hiddenCols = FMS.table.hiddenCols;
+}
+
+// Close the column panel when clicking anywhere outside it
+document.addEventListener('click', function(e) {
+  if (FMS.table && FMS.table.columnPanelOpen) {
+    var panel = document.getElementById('columnPanel');
+    var toggleBtn = e.target.closest ? e.target.closest('.column-toggle-wrap') : null;
+    if (panel && !panel.contains(e.target) && !toggleBtn) {
+      FMS.table.columnPanelOpen = false;
+      if (document.getElementById('tableContainer')) {
+        renderDataTable(FMS.currentHeader, FMS.currentStep);
+      }
+    }
+  }
+});
+
+// ===== COLUMN RESIZE (drag the handle on the right edge of a <th>) =====
+var colResizeState = null;
+
+function startColResize(e, idx) {
+  e.preventDefault();
+  e.stopPropagation();
+  var th = e.target.closest('th');
+  colResizeState = { idx: idx, startX: e.clientX, startWidth: th.offsetWidth, th: th };
+  document.addEventListener('mousemove', onColResizeMove);
+  document.addEventListener('mouseup', onColResizeEnd);
+}
+
+function onColResizeMove(e) {
+  if (!colResizeState) return;
+  var delta = e.clientX - colResizeState.startX;
+  var newWidth = Math.max(50, colResizeState.startWidth + delta);
+  colResizeState.th.style.width = newWidth + 'px';
+  colResizeState.th.style.minWidth = newWidth + 'px';
+  colResizeState.th.style.maxWidth = newWidth + 'px';
+  colResizeState.liveWidth = newWidth;
+}
+
+function onColResizeEnd() {
+  if (!colResizeState) return;
+  if (colResizeState.liveWidth) {
+    FMS.table.colWidths[colResizeState.idx] = colResizeState.liveWidth;
+    persistColumnPrefs();
+  }
+  document.removeEventListener('mousemove', onColResizeMove);
+  document.removeEventListener('mouseup', onColResizeEnd);
+  colResizeState = null;
 }
 
 function statusTabHtml(key, label, count, active) {

@@ -121,6 +121,23 @@ function getPlannedActualCols(fields) {
   return { plannedCol: plannedCol, actualCol: actualCol };
 }
 
+/**
+ * A field is only shown (in the form OR the table) if it has a Data Type
+ * configured in Row 6 - EXCEPT "Planned" and "Actual", which are always
+ * shown regardless of whether Row 6 has a type for them:
+ * - "Planned" is always shown, always non-editable (auto-computed via TAT).
+ * - "Actual" is always kept internally (needed for pending/completed
+ *   status detection) and shown as a column in the table.
+ * Any other column left with an EMPTY Data Type cell is treated as "not
+ * configured yet" and is hidden everywhere (form + table).
+ */
+function isFieldConfigured(field) {
+  var n = field.name.toLowerCase();
+  if (n.indexOf('planned') !== -1) return true;
+  if (n.indexOf('actual') !== -1) return true;
+  return !!field.type; // must have a non-empty Data Type (Row 6) to appear
+}
+
 // ============================================
 // STEP SEQUENCE (from STEPS sheet, for a given Header)
 // ============================================
@@ -333,11 +350,16 @@ function getStepTableData(masterSheetUrl, masterSheetName, stepsSheetName, heade
       ? sheet.getRange(WF_FIELD_NAME_ROW, 1, 1, baseColCount).getValues()[0]
       : [];
 
+    // Skip this step's own columns that have no Data Type configured in
+    // Row 6 (except Planned/Actual, which are always shown - see
+    // isFieldConfigured()). Base identifying columns are always shown.
+    var visibleFields = currentFields.filter(isFieldConfigured);
+
     var columnNames = [];
     for (var bc = 0; bc < baseColCount; bc++) {
       columnNames.push(String(headerRowVals[bc]).trim() || ('Col ' + (bc + 1)));
     }
-    currentFields.forEach(function (f) {
+    visibleFields.forEach(function (f) {
       columnNames.push(f.name || ('Col ' + f.col));
     });
 
@@ -363,7 +385,7 @@ function getStepTableData(masterSheetUrl, masterSheetName, stepsSheetName, heade
       for (var bc2 = 0; bc2 < baseColCount; bc2++) {
         cells.push(formatDateSafe(rowValues[bc2]));
       }
-      currentFields.forEach(function (f) {
+      visibleFields.forEach(function (f) {
         cells.push(formatDateSafe(rowValues[f.col - 1]));
       });
 
@@ -409,6 +431,8 @@ function getStepFormFields(masterSheetUrl, masterSheetName, dropdownSheetName, h
       if (nameLower.indexOf('actual') !== -1) return; // never shown
 
       if (nameLower.indexOf('planned') !== -1) {
+        // Always shown, always non-editable - regardless of whether Row 6
+        // has a Data Type for it (Planned is auto-computed via TAT).
         formFields.push({
           name: f.name,
           type: 'PLANNED_DISPLAY',
@@ -417,6 +441,10 @@ function getStepFormFields(masterSheetUrl, masterSheetName, dropdownSheetName, h
         });
         return;
       }
+
+      // Any other field with NO Data Type configured in Row 6 is treated
+      // as "not set up yet" and must not appear in the form at all.
+      if (!f.type) return;
 
       var field = { name: f.name, type: f.type.toUpperCase(), options: [] };
       if (field.type.indexOf('DROPDOWN') !== -1 || field.type.indexOf('CHECKBOX') !== -1) {
