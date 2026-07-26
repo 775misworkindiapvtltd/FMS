@@ -425,16 +425,22 @@ function calculateTATLocal(submissionDateTime, tatHours, officeStartTime, office
 }
 
 /**
- * Format result for logging
+ * Format a Date for display EVERYWHERE in FMS (table cells, popup form's
+ * read-only Planned value, pending-list "Planned:" caption, "Last Updated"
+ * timestamp, etc).
+ *
+ * Format: "DD Mon YY HH:MM:SS" (24-hour time), e.g. "24 Jul 26 17:43:32"
  */
 function formatResult(date) {
-  var days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  
-  var h = date.getHours();
-  var ampm = h >= 12 ? 'PM' : 'AM';
-  var h12 = h > 12 ? h - 12 : (h === 0 ? 12 : h);
-  var m = ('0' + date.getMinutes()).slice(-2);
-  
-  return days[date.getDay()] + ', ' + months[date.getMonth()] + ' ' + date.getDate() + ', ' + date.getFullYear() + ' ' + ('0' + h12).slice(-2) + ':' + m + ' ' + ampm;
+  var pad2 = function (n) { return ('0' + n).slice(-2); };
+
+  var dd = pad2(date.getDate());
+  var mon = months[date.getMonth()];
+  var yy = pad2(date.getFullYear() % 100);
+  var hh = pad2(date.getHours());
+  var mm = pad2(date.getMinutes());
+  var ss = pad2(date.getSeconds());
+
+  return dd + ' ' + mon + ' ' + yy + ' ' + hh + ':' + mm + ':' + ss;
 }

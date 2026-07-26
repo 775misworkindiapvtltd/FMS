@@ -349,18 +349,37 @@ function getStepTableData(masterSheetUrl, masterSheetName, stepsSheetName, heade
     var headerRowVals = baseColCount > 0
       ? sheet.getRange(WF_FIELD_NAME_ROW, 1, 1, baseColCount).getValues()[0]
       : [];
+    var baseTypeVals = baseColCount > 0
+      ? sheet.getRange(WF_TYPE_ROW, 1, 1, baseColCount).getValues()[0]
+      : [];
 
     // Skip this step's own columns that have no Data Type configured in
     // Row 6 (except Planned/Actual, which are always shown - see
     // isFieldConfigured()). Base identifying columns are always shown.
     var visibleFields = currentFields.filter(isFieldConfigured);
 
+    // columnTypes runs parallel to columnNames - lets the client know
+    // which columns hold dates/times, so it can render a calendar-picker
+    // in that column's search box instead of a plain text search.
     var columnNames = [];
+    var columnTypes = [];
     for (var bc = 0; bc < baseColCount; bc++) {
-      columnNames.push(String(headerRowVals[bc]).trim() || ('Col ' + (bc + 1)));
+      var baseName = String(headerRowVals[bc]).trim() || ('Col ' + (bc + 1));
+      var baseType = String(baseTypeVals[bc]).trim().toUpperCase();
+      var baseNameLower = baseName.toLowerCase();
+      var baseIsDate = baseType.indexOf('DATE') !== -1 ||
+        baseNameLower.indexOf('date') !== -1 || baseNameLower.indexOf('timestamp') !== -1;
+      columnNames.push(baseName);
+      columnTypes.push(baseIsDate ? 'DATE' : baseType);
     }
     visibleFields.forEach(function (f) {
       columnNames.push(f.name || ('Col ' + f.col));
+      // "Planned"/"Actual" are always date-times even if Row 6 has no
+      // type configured for them (see isFieldConfigured()).
+      var nameLower = (f.name || '').toLowerCase();
+      var isDateField = f.type.toUpperCase().indexOf('DATE') !== -1 ||
+        nameLower.indexOf('planned') !== -1 || nameLower.indexOf('actual') !== -1;
+      columnTypes.push(isDateField ? 'DATE' : f.type.toUpperCase());
     });
 
     var lastRow = sheet.getLastRow();
@@ -392,7 +411,7 @@ function getStepTableData(masterSheetUrl, masterSheetName, stepsSheetName, heade
       rows.push({ row: r, status: status, cells: cells });
     }
 
-    return { success: true, columns: columnNames, rows: rows };
+    return { success: true, columns: columnNames, columnTypes: columnTypes, rows: rows };
 
   } catch (e) {
     return { success: false, message: 'Error: ' + e.message };

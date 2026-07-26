@@ -44,14 +44,22 @@ function setSyncingState(isSyncing) {
   if (icon) icon.classList.toggle('syncing', isSyncing);
 }
 
+// Same "DD Mon YY HH:MM:SS" style used everywhere else in FMS (table
+// cells, popup form Planned value, pending-list captions) - kept as a
+// small client-side mirror of TAT_Calculator.gs's formatResult() so the
+// topbar clock/status doesn't need a round-trip to the server.
+var FMS_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function formatFmsDate(d) {
+  var pad2 = function(n) { return ('0' + n).slice(-2); };
+  return pad2(d.getDate()) + ' ' + FMS_MONTHS[d.getMonth()] + ' ' + pad2(d.getFullYear() % 100) + ' ' +
+    pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+}
+
 function setLastUpdatedNow(changed) {
   FMS.lastSyncTime = new Date();
   var el = document.getElementById('lastUpdatedText');
   if (!el) return;
-  var pad = function(n) { return (n < 10 ? '0' : '') + n; };
-  var d = FMS.lastSyncTime;
-  var stamp = pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
-  el.textContent = 'Updated: ' + stamp;
+  el.textContent = 'Updated: ' + formatFmsDate(FMS.lastSyncTime);
   if (changed) {
     el.classList.add('updated-flash');
     setTimeout(function() { el.classList.remove('updated-flash'); }, 2500);
@@ -109,8 +117,9 @@ function silentRefreshCurrentView() {
           var cached = FMS.tableCache[cacheKey];
           var oldStr = cached ? (JSON.stringify(cached.rows) + JSON.stringify(cached.columns)) : null;
           if (newStr !== oldStr) {
-            FMS.tableCache[cacheKey] = { columns: res.columns, rows: res.rows, fetchedAt: new Date() };
+            FMS.tableCache[cacheKey] = { columns: res.columns, columnTypes: res.columnTypes || [], rows: res.rows, fetchedAt: new Date() };
             FMS.table.columns = res.columns;
+            FMS.table.columnTypes = res.columnTypes || [];
             FMS.table.rows = res.rows;
             // Only re-render if this table is still the one on screen
             if (document.getElementById('tableContainer')) {
@@ -230,6 +239,7 @@ function openPage(pageName, headerName) {
 // ===== WORKFLOW: DATA TABLE (mirrors the real sheet) =====
 FMS.table = {
   columns: [],
+  columnTypes: [],   // parallel to columns[] - 'DATE' marks a date/time column
   rows: [],
   filterStatus: 'pending',   // 'pending' | 'completed' | 'all'
   globalSearch: '',
@@ -292,6 +302,7 @@ function loadStepTable(headerName, stepName) {
     // Instant render from cache - no spinner, no "circle ghoomna"
     main.innerHTML = pageShell;
     FMS.table.columns = cached.columns;
+    FMS.table.columnTypes = cached.columnTypes || [];
     FMS.table.rows = cached.rows;
     renderDataTable(headerName, stepName);
     fetchStepTableInBackground(headerName, stepName, cacheKey, false);
@@ -313,10 +324,11 @@ function fetchStepTableInBackground(headerName, stepName, cacheKey, showErrorsIn
         }
         return;
       }
-      FMS.tableCache[cacheKey] = { columns: res.columns, rows: res.rows, fetchedAt: new Date() };
+      FMS.tableCache[cacheKey] = { columns: res.columns, columnTypes: res.columnTypes || [], rows: res.rows, fetchedAt: new Date() };
       // Only update the visible table if the user is still viewing this exact step
       if (FMS.currentHeader === headerName && FMS.currentStep === stepName) {
         FMS.table.columns = res.columns;
+        FMS.table.columnTypes = res.columnTypes || [];
         FMS.table.rows = res.rows;
         if (document.getElementById('tableContainer')) {
           renderDataTable(headerName, stepName);
@@ -333,6 +345,39 @@ function fetchStepTableInBackground(headerName, stepName, cacheKey, showErrorsIn
     .wfGetStepTableData(FMS_SESSION.sheetUrl, FMS_SESSION.masterSheet, FMS_SESSION.stepsSheet, headerName, stepName);
 }
 
+// A date-column search value comes from a native <input type="date"> as
+// "YYYY-MM-DD". The cell itself holds a formatted string produced by
+// formatResult() in TAT_Calculator.gs, always in the fixed
+// "DD Mon YY HH:MM:SS" style (e.g. "24 Jul 26 17:43:32"). Parsed explicitly
+// (not via new Date(str)) so this works identically across every browser,
+// instead of relying on each browser's own date-string parsing quirks.
+var FMS_MONTH_LOOKUP = { Jan:0, Feb:1, Mar:2, Apr:3, May:4, Jun:5, Jul:6, Aug:7, Sep:8, Oct:9, Nov:10, Dec:11 };
+
+function parseFmsDate(str) {
+  str = String(str || '').trim();
+  var m = /^(\d{2})\s+([A-Za-z]{3})\s+(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/.exec(str);
+  if (!m) return null;
+  var monthIdx = FMS_MONTH_LOOKUP[m[2]];
+  if (monthIdx === undefined) return null;
+  var year = 2000 + parseInt(m[3], 10); // "26" -> 2026
+  return new Date(year, monthIdx, parseInt(m[1], 10), parseInt(m[4], 10), parseInt(m[5], 10), parseInt(m[6], 10));
+}
+
+function cellMatchesDateFilter(cellValue, isoDateStr) {
+  if (!isoDateStr) return true;
+  var str = String(cellValue || '').trim();
+  if (!str) return false;
+  var parsed = parseFmsDate(str) || new Date(str); // fallback for any non-FMS-formatted date text
+  if (!parsed || isNaN(parsed.getTime())) return false;
+  var pad = function(n) { return (n < 10 ? '0' : '') + n; };
+  var cellIso = parsed.getFullYear() + '-' + pad(parsed.getMonth() + 1) + '-' + pad(parsed.getDate());
+  return cellIso === isoDateStr;
+}
+
+function isDateColumn(idx) {
+  return (FMS.table.columnTypes || [])[idx] === 'DATE';
+}
+
 function getFilteredSortedRows() {
   var t = FMS.table;
   var rows = t.rows.filter(function(r) {
@@ -346,8 +391,12 @@ function getFilteredSortedRows() {
     for (var colIdx in t.colSearch) {
       var term = t.colSearch[colIdx];
       if (!term) continue;
-      var cellVal = String(r.cells[colIdx] || '').toLowerCase();
-      if (cellVal.indexOf(term.toLowerCase()) === -1) return false;
+      if (isDateColumn(colIdx)) {
+        if (!cellMatchesDateFilter(r.cells[colIdx], term)) return false;
+      } else {
+        var cellVal = String(r.cells[colIdx] || '').toLowerCase();
+        if (cellVal.indexOf(term.toLowerCase()) === -1) return false;
+      }
     }
     return true;
   });
@@ -430,13 +479,20 @@ function renderDataTable(headerName, stepName) {
   html += '</div>';
 
   // ---- Table ----
+  // Every column gets an EXPLICIT pixel width (a sensible default of 150px
+  // if the user hasn't dragged it yet). Combined with table-layout:fixed
+  // and the table itself being width:auto (not 100%), this guarantees that
+  // resizing ONE column never causes any other column to grow/shrink to
+  // compensate - the total table width is simply the sum of all column
+  // widths, and leftover space (if any) stays blank after the last column.
+  var DEFAULT_COL_WIDTH = 150;
   html += '<div class="table-scroll-wrap"><table class="data-table" id="fmsDataTable"><thead>';
   html += '<tr>';
   html += '<th class="col-serial">S.No</th>';
   visibleIdx.forEach(function(idx) {
     var arrow = t.sortCol === idx ? (t.sortDir === 'asc' ? ' ▲' : ' ▼') : '';
-    var w = t.colWidths[idx];
-    var style = w ? ' style="width:' + w + 'px; min-width:' + w + 'px; max-width:' + w + 'px;"' : '';
+    var w = t.colWidths[idx] || DEFAULT_COL_WIDTH;
+    var style = ' style="width:' + w + 'px; min-width:' + w + 'px; max-width:' + w + 'px;"';
     html += '<th data-col="' + idx + '"' + style + '>' +
       '<span class="th-label" onclick="onSortColumn(' + idx + ')">' + escapeHtml(t.columns[idx]) + arrow + '</span>' +
       '<span class="col-resize-handle" onmousedown="startColResize(event,' + idx + ')"></span>' +
@@ -446,7 +502,17 @@ function renderDataTable(headerName, stepName) {
   html += '</tr><tr class="col-search-row">';
   html += '<th></th>';
   visibleIdx.forEach(function(idx) {
-    html += '<th><input type="text" placeholder="Search..." value="' + escapeAttr(t.colSearch[idx] || '') + '" oninput="onColumnSearch(' + idx + ', this.value)"></th>';
+    if (isDateColumn(idx)) {
+      // Any column holding a Date/Time value (Planned, Actual, Timestamp,
+      // or any Row6 "DATE" type) gets a native calendar-picker in its
+      // search box instead of a plain text box.
+      html += '<th><div class="date-search-wrap">' +
+        '<input type="date" value="' + escapeAttr(t.colSearch[idx] || '') + '" onchange="onColumnSearch(' + idx + ', this.value)">' +
+        (t.colSearch[idx] ? '<span class="date-search-clear material-icons-round" onclick="onColumnSearch(' + idx + ', \'\')">close</span>' : '') +
+        '</div></th>';
+    } else {
+      html += '<th><input type="text" placeholder="Search..." value="' + escapeAttr(t.colSearch[idx] || '') + '" oninput="onColumnSearch(' + idx + ', this.value)"></th>';
+    }
   });
   html += '<th></th>';
   html += '</tr></thead><tbody>';
@@ -607,7 +673,15 @@ function onColumnSearch(colIdx, value) {
   FMS.table.page = 1;
   renderDataTable(FMS.currentHeader, FMS.currentStep);
   var inputs = document.querySelectorAll('.col-search-row input');
-  if (inputs[colIdx]) { inputs[colIdx].focus(); inputs[colIdx].setSelectionRange(inputs[colIdx].value.length, inputs[colIdx].value.length); }
+  var target = inputs[colIdx];
+  if (target) {
+    target.focus();
+    // setSelectionRange is only valid on text-like inputs, not type="date" -
+    // guard it so the calendar-picker column doesn't throw on refocus.
+    if (typeof target.setSelectionRange === 'function' && target.type !== 'date') {
+      target.setSelectionRange(target.value.length, target.value.length);
+    }
+  }
 }
 
 function onSortColumn(colIdx) {
