@@ -163,9 +163,24 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
    title+subtitle stack made the topbar's content taller than its fixed
    height, visually pushing/clipping things. The "Last Updated" line now
    lives on the Home page itself instead (see .home-last-updated). */
-.topbar-title-block { display: flex; align-items: center; }
-.topbar-title { font-size: 14px; font-weight: 700; color: var(--text-primary); white-space: nowrap; transition: font-size 0.15s ease; }
+.topbar-title-block { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.topbar-title { font-size: 14px; font-weight: 700; color: var(--text-primary); white-space: nowrap; transition: font-size 0.15s ease; flex-shrink: 0; }
 .topbar-title .brand-fms { color: var(--accent); }
+
+/* Breadcrumb (current Step / Header) shown right after "FMS Fashion" on
+   the SAME topbar line - populated by JS (updateTopbarBreadcrumb() in
+   Scripts.html) whenever the user opens a Step's table, and cleared on
+   Home. A vertical divider separates it from the app title. */
+.topbar-breadcrumb {
+  display: flex; align-items: center; gap: 6px; padding-left: 10px;
+  border-left: 1px solid var(--border); font-size: calc(12px * var(--content-font-scale));
+  color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0;
+}
+.topbar-breadcrumb:empty { display: none; border-left: none; padding-left: 0; }
+.topbar-breadcrumb .material-icons-round { font-size: 15px; color: var(--accent); flex-shrink: 0; }
+.topbar-breadcrumb strong { color: var(--text-primary); font-weight: 600; }
+.topbar-breadcrumb .breadcrumb-sep { color: var(--text-muted); }
 
 /* Auto-shrink step (applied by JS via autoShrinkTopbar() in Scripts.html
    when the topbar's content is wider than the available space) - shrinks
@@ -510,6 +525,23 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
    page - no big heading, no wasted top whitespace (per user request). */
 .table-page { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 
+/* ROOT-CAUSE FIX for "pagination/scrollbar not visible": #tableContainer
+   (the JS-rendered inner div - see loadStepTable()/renderDataTable() in
+   Scripts.html) had NO layout rules of its own. .table-page correctly
+   passed down flex:1/min-height:0, but that only constrains #tableContainer
+   as a whole - without #tableContainer ALSO being display:flex, its own
+   children (.status-tabs-row, .table-scroll-wrap, .table-pagination)
+   just stacked in normal block flow with no height limit, growing taller
+   than the visible area. Since the outer <body> is intentionally
+   overflow:hidden (see the "outer page never scrolls" rule above), that
+   overflow was silently clipped off-screen - which is exactly why the
+   pagination bar and the table's own scrollbar were invisible. Mirroring
+   the same flex rules onto #tableContainer fixes it structurally: now
+   .table-scroll-wrap (flex:1; min-height:0) actually shrinks to fit the
+   remaining space and shows its own scrollbar, while the toolbar row and
+   pagination bar (flex-shrink:0) stay pinned at the top/bottom. */
+#tableContainer { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+
 /* Everything above the table lives in ONE single toolbar line now:
    breadcrumb title -> status tabs (Pending/Completed/All/Overdue) ->
    global search -> column-toggle -> page-size. The table's own header
@@ -523,14 +555,6 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
   padding-bottom: 6px;
 }
 .status-tabs-row::-webkit-scrollbar { display: none; }
-.table-page-title {
-  display: flex; align-items: center; gap: 6px; font-size: calc(12.5px * var(--content-font-scale));
-  color: var(--text-secondary); flex-shrink: 0; white-space: nowrap;
-}
-.table-page-title .material-icons-round { font-size: 16px; color: var(--accent); }
-.table-page-title strong { color: var(--text-primary); font-weight: 600; font-size: calc(13px * var(--content-font-scale)); }
-.breadcrumb-sep { color: var(--text-muted); }
-
 .status-tabs { display: flex; gap: 6px; flex-shrink: 0; white-space: nowrap; }
 /* Square (not pill/circle) tabs - per user request, uses the same
    --radius-sm token as every other button in the app (icon-btn, page-btn,

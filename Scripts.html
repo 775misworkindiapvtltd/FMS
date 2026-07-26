@@ -298,7 +298,26 @@ function openPage(pageName, headerName) {
 
   FMS.currentHeader = headerName;
   FMS.currentStep = pageName;
+  updateTopbarBreadcrumb(pageName, headerName);
   loadStepTable(headerName, pageName);
+}
+
+/**
+ * Shows/clears the "Step / Header" breadcrumb in the TOPBAR itself,
+ * right after the "FMS Fashion" title (on the same single line) - per
+ * user request, instead of it living inside the table's own toolbar row.
+ */
+function updateTopbarBreadcrumb(stepName, headerName) {
+  var el = document.getElementById('topbarBreadcrumb');
+  if (!el) return;
+  if (!stepName) {
+    el.innerHTML = '';
+  } else {
+    el.innerHTML = '<span class="material-icons-round">assignment</span>' +
+      '<strong>' + escapeHtml(stepName) + '</strong>' +
+      '<span class="breadcrumb-sep">/</span>' + escapeHtml(headerName);
+  }
+  scheduleTopbarAutoShrink(); // breadcrumb text changes the topbar's content width
 }
 
 // ===== HOME DASHBOARD (summary of all assigned Steps) =====
@@ -306,6 +325,7 @@ function goHome() {
   closeSidebar();
   FMS.currentHeader = null;
   FMS.currentStep = null;
+  updateTopbarBreadcrumb(null, null);
 
   var items = document.querySelectorAll('.nav-item');
   items.forEach(function(item) { item.classList.remove('active'); });
@@ -735,17 +755,19 @@ function renderDataTable(headerName, stepName) {
   // (Pending/Completed/All/Overdue) -> global search -> column-toggle ->
   // page-size. The table's own header row follows IMMEDIATELY after this
   // one toolbar line - no separate rows, no extra gap. ----
+  // Breadcrumb title ("Step / Header") now lives in the TOPBAR itself
+  // (right after "FMS Fashion"), not in this toolbar row - see
+  // updateTopbarBreadcrumb(), called from loadStepTable()/goHome().
   html += '<div class="status-tabs-row">';
-  html += '<div class="table-page-title"><span class="material-icons-round">assignment</span>' +
-    '<strong>' + escapeHtml(stepName) + '</strong><span class="breadcrumb-sep">/</span>' + escapeHtml(headerName) + '</div>';
   html += '<div class="status-tabs">';
-  html += statusTabHtml('pending', 'Pending', pendingCount, t.filterStatus);
-  html += statusTabHtml('completed', 'Completed', completedCount, t.filterStatus);
+  // Order requested: All -> Pending -> Overdue -> Completed
   html += statusTabHtml('all', 'All', allRows.length, t.filterStatus);
+  html += statusTabHtml('pending', 'Pending', pendingCount, t.filterStatus);
   if (overdueCount > 0) {
     html += '<button class="status-tab status-tab-overdue' + (t.filterStatus === 'overdue' ? ' active' : '') + '" onclick="onStatusFilter(\'overdue\')">' +
       '<span class="material-icons-round" style="font-size:13px;">warning</span>Overdue <span class="status-tab-count">' + overdueCount + '</span></button>';
   }
+  html += statusTabHtml('completed', 'Completed', completedCount, t.filterStatus);
   html += '</div>';
   html += '<button type="button" class="reset-filters-btn" onclick="resetAllFilters()" title="Reset all filters back to default">' +
     '<span class="material-icons-round">restart_alt</span>Reset Filters</button>';
