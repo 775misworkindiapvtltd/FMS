@@ -145,13 +145,14 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
 }
 .topbar-logo-box .material-icons-round { font-size: 18px; color: #fff; }
 
-.topbar-title-block { display: flex; flex-direction: column; line-height: 1.25; }
-.topbar-title { font-size: 14px; font-weight: 700; color: var(--text-primary); }
-.topbar-title span { color: var(--accent); }
-.topbar-subtitle {
-  display: flex; align-items: center; gap: 4px; font-size: 9.5px; color: var(--text-muted); white-space: nowrap;
-}
-.topbar-subtitle .sync-icon { font-size: 11px !important; }
+/* Title block is now a single line (no stacked subtitle underneath) -
+   this was the actual cause of the topbar looking like "2 rows": the
+   title+subtitle stack made the topbar's content taller than its fixed
+   height, visually pushing/clipping things. The "Last Updated" line now
+   lives on the Home page itself instead (see .home-last-updated). */
+.topbar-title-block { display: flex; align-items: center; }
+.topbar-title { font-size: 14px; font-weight: 700; color: var(--text-primary); white-space: nowrap; }
+.topbar-title .brand-fms { color: var(--accent); }
 
 /* User avatar chip (initials circle + name/role text) - replaces the
    plain icon+name user-badge in the redesigned header. */
@@ -193,8 +194,9 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
 }
 .user-badge .material-icons-round { font-size: 15px; }
 
-/* Live Clock (top-right) - "Last Updated" now lives in the header's
-   subtitle line (.topbar-subtitle) instead of next to the clock. */
+/* Live Clock (top-right) - "Last Updated" now lives on the Home page
+   itself (.home-last-updated) instead of the topbar, so the header
+   stays a clean single row. */
 .topbar-clock {
   display: flex; align-items: center; padding: 4px 12px;
   background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-sm);
@@ -948,7 +950,6 @@ tr.row-overdue td.col-serial { border-left: 3px solid var(--danger); }
   /* On narrow screens, keep everything on one line (per user request) by
      shrinking non-essential text instead of hiding/wrapping it. */
   .topbar-title { font-size: 12.5px; }
-  .topbar-subtitle { font-size: 8.5px; }
   .user-avatar-role { display: none; } /* least essential text - name + initials still shown */
   .user-avatar-chip { padding: 3px 8px 3px 3px; }
   .topbar-clock { display: none; } /* least essential item - first to go on very narrow phones */
@@ -993,7 +994,6 @@ tr.row-overdue td.col-serial { border-left: 3px solid var(--danger); }
 
 /* Extra-small phones */
 @media (max-width: 420px) {
-  .topbar-subtitle { display: none; } /* title still shown, just drop the "Updated: ..." line */
   .font-controls { display: none; } /* least essential control on the smallest screens */
   .home-stat-card { padding: 12px 14px; }
   .modal-header h3 { font-size: 13px; }

@@ -26,11 +26,7 @@
         <span class="material-icons-round">checkroom</span>
       </div>
       <div class="topbar-title-block">
-        <div class="topbar-title">FMS <span>Fashion</span></div>
-        <div class="topbar-subtitle" id="topbarSubtitle">
-          <span class="material-icons-round sync-icon" id="syncIcon">sync</span>
-          <span id="lastUpdatedText">Not synced yet</span>
-        </div>
+        <div class="topbar-title"><span class="brand-fms">FMS</span> Fashion</div>
       </div>
     </div>
     <div class="topbar-right">
@@ -48,6 +44,14 @@
       <div class="topbar-clock" title="Current time">
         <div class="clock-time" id="liveClock">--:--:--</div>
       </div>
+      <!-- Kept in the DOM (hidden) so existing sync/last-updated JS logic
+           (setSyncingState/setLastUpdatedNow, used for step-table
+           background refreshes) keeps working without errors - the
+           visible "Last Updated" indicator now lives on the Home page
+           itself instead of the topbar, to keep the topbar a clean
+           single row. -->
+      <span class="material-icons-round sync-icon" id="syncIcon" style="display:none;">sync</span>
+      <span id="lastUpdatedText" style="display:none;">Not synced yet</span>
       <div class="user-avatar-chip" title="Logged in user">
         <div class="user-avatar-initials" id="userInitials">U</div>
         <div class="user-avatar-text">
