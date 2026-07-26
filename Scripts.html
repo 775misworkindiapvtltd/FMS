@@ -144,11 +144,14 @@ function closeSidebar() {
 }
 
 // ===== THEME =====
+// Delegates to the global FMS Theme Engine (ThemeEngine.html) so the quick
+// topbar toggle stays perfectly in sync with the full Appearance drawer
+// (localStorage, data-theme on <html>, system-mode awareness, etc).
 function toggleTheme() {
-  FMS.currentTheme = FMS.currentTheme === 'dark' ? 'light' : 'dark';
-  document.body.setAttribute('data-theme', FMS.currentTheme);
-  var icon = document.getElementById('themeIcon');
-  if (icon) icon.textContent = FMS.currentTheme === 'dark' ? 'light_mode' : 'dark_mode';
+  if (typeof FMSTheme === 'undefined') return; // ThemeEngine not loaded (defensive)
+  var resolved = FMSTheme.getResolvedTheme();
+  FMSTheme.setDisplayMode(resolved === 'dark' ? 'light' : 'dark');
+  FMS.currentTheme = FMSTheme.getResolvedTheme();
 }
 
 // ===== FONT SIZE =====

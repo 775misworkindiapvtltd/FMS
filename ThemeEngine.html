@@ -1,0 +1,306 @@
+<script>
+/* ============================================================
+   FMS THEME ENGINE
+   Application-wide Appearance & Dynamic Color Scheme System
+   - Display Mode: light / dark / system (prefers-color-scheme)
+   - "Surprise Me" + 37 curated color palettes
+   - FOUC-safe: this script must be the FIRST thing included in
+     <head>, so colors/mode are applied to <html> before paint.
+   - Framework: Vanilla CSS (custom properties on :root / <html>)
+   ============================================================ */
+(function () {
+  'use strict';
+
+  var STORAGE_MODE_KEY = 'app_display_mode';
+  var STORAGE_SCHEME_KEY = 'app_color_scheme';
+  var STORAGE_SURPRISE_KEY = 'app_color_scheme_surprise';
+
+  // ---------- 37 curated palettes (spec requires 24+) ----------
+  var PALETTES = [
+    { id: 'violet-night',  name: 'Violet Night',  primary: '#7C3AED', hover: '#9333EA' },
+    { id: 'cobalt-blue',   name: 'Cobalt Blue',   primary: '#2563EB', hover: '#3B82F6' },
+    { id: 'emerald-dark',  name: 'Emerald Dark',  primary: '#059669', hover: '#10B981' },
+    { id: 'rose-quartz',   name: 'Rose Quartz',   primary: '#F43F5E', hover: '#FB7185' },
+    { id: 'amber-forge',   name: 'Amber Forge',   primary: '#F59E0B', hover: '#D97706' },
+    { id: 'crimson-edge',  name: 'Crimson Edge',  primary: '#DC2626', hover: '#EF4444' },
+    { id: 'slate-frost',   name: 'Slate Frost',   primary: '#64748B', hover: '#475569' },
+    { id: 'lime-surge',    name: 'Lime Surge',    primary: '#84CC16', hover: '#65A30D' },
+    { id: 'indigo-wave',   name: 'Indigo Wave',   primary: '#6366F1', hover: '#4F46E5' },
+    { id: 'sunset-orange', name: 'Sunset Orange', primary: '#EA580C', hover: '#F97316' },
+    { id: 'orange',        name: 'Orange',        primary: '#FF6B00', hover: '#FF8533' },
+    { id: 'sunset',        name: 'Sunset',        primary: '#FDBA74', hover: '#FB923C' },
+    { id: 'gold-luxe',     name: 'Gold Luxe',     primary: '#EAB308', hover: '#CA8A04' },
+    { id: 'ruby',          name: 'Ruby',          primary: '#E11D48', hover: '#BE123C' },
+    { id: 'berry-punch',   name: 'Berry Punch',   primary: '#D946EF', hover: '#C026D3' },
+    { id: 'pink',          name: 'Pink',          primary: '#EC4899', hover: '#DB2777' },
+    { id: 'fuchsia-bloom', name: 'Fuchsia Bloom', primary: '#A855F7', hover: '#9333EA' },
+    { id: 'plum',          name: 'Plum',          primary: '#8B5CF6', hover: '#7C3AED' },
+    { id: 'midnight-navy', name: 'Midnight Navy', primary: '#1E3A8A', hover: '#1E40AF' },
+    { id: 'sky-wave',      name: 'Sky Wave',      primary: '#0EA5E9', hover: '#0284C7' },
+    { id: 'cyan-pulse',    name: 'Cyan Pulse',    primary: '#06B6D4', hover: '#0891B2' },
+    { id: 'teal-tide',     name: 'Teal Tide',     primary: '#14B8A6', hover: '#0D9488' },
+    { id: 'mint-surge',    name: 'Mint Surge',    primary: '#10B981', hover: '#059669' },
+    { id: 'chartreuse',    name: 'Chartreuse',    primary: '#A3E635', hover: '#84CC16' },
+    { id: 'forest',        name: 'Forest',        primary: '#15803D', hover: '#166534' },
+    { id: 'jade',          name: 'Jade',          primary: '#047857', hover: '#065F46' },
+    { id: 'seafoam',       name: 'Seafoam',       primary: '#2DD4BF', hover: '#14B8A6' },
+    { id: 'azure',         name: 'Azure',         primary: '#38BDF8', hover: '#0284C7' },
+    { id: 'periwinkle',    name: 'Periwinkle',    primary: '#818CF8', hover: '#4F46E5' },
+    { id: 'lavender',      name: 'Lavender',      primary: '#C084FC', hover: '#A855F7' },
+    { id: 'orchid',        name: 'Orchid',        primary: '#E879F9', hover: '#D946EF' },
+    { id: 'flamingo',      name: 'Flamingo',      primary: '#FB7185', hover: '#F43F5E' },
+    { id: 'grapefruit',    name: 'Grapefruit',    primary: '#FF6B6B', hover: '#EE5253' },
+    { id: 'wine',          name: 'Wine',          primary: '#9F1239', hover: '#881337' },
+    { id: 'copper',        name: 'Copper',        primary: '#B45309', hover: '#92400E' },
+    { id: 'tangerine',     name: 'Tangerine',     primary: '#F97316', hover: '#EA580C' },
+    { id: 'honey',         name: 'Honey',         primary: '#FACC15', hover: '#EAB308' }
+  ];
+
+  var DEFAULT_SCHEME = 'indigo-wave'; // closest match to FMS's original #667eea/#764ba2 accent
+
+  // ---------- Color math helpers ----------
+  function hexToRgb(hex) {
+    hex = String(hex).replace('#', '');
+    if (hex.length === 3) hex = hex.split('').map(function (c) { return c + c; }).join('');
+    var num = parseInt(hex, 16);
+    return { r: (num >> 16) & 255, g: (num >> 8) & 255, b: num & 255 };
+  }
+  function rgbToHex(r, g, b) {
+    return '#' + [r, g, b].map(function (v) {
+      var h = Math.round(Math.max(0, Math.min(255, v))).toString(16);
+      return h.length === 1 ? '0' + h : h;
+    }).join('');
+  }
+  function mixHex(hexA, hexB, weightB) {
+    var a = hexToRgb(hexA), b = hexToRgb(hexB);
+    return rgbToHex(
+      a.r + (b.r - a.r) * weightB,
+      a.g + (b.g - a.g) * weightB,
+      a.b + (b.b - a.b) * weightB
+    );
+  }
+  function toRgba(hex, alpha) {
+    var c = hexToRgb(hex);
+    return 'rgba(' + c.r + ',' + c.g + ',' + c.b + ',' + alpha + ')';
+  }
+
+  function getPalette(id) {
+    for (var i = 0; i < PALETTES.length; i++) {
+      if (PALETTES[i].id === id) return PALETTES[i];
+    }
+    return null;
+  }
+  function randomPaletteId(excludeId) {
+    if (PALETTES.length <= 1) return PALETTES[0].id;
+    var idx, id;
+    do {
+      idx = Math.floor(Math.random() * PALETTES.length);
+      id = PALETTES[idx].id;
+    } while (id === excludeId);
+    return id;
+  }
+
+  // ---------- Storage (defensive - private browsing / disabled storage) ----------
+  function safeGet(key) { try { return window.localStorage.getItem(key); } catch (e) { return null; } }
+  function safeSet(key, val) { try { window.localStorage.setItem(key, val); } catch (e) { /* ignore */ } }
+
+  function getStoredMode() {
+    var m = safeGet(STORAGE_MODE_KEY);
+    return (m === 'light' || m === 'dark' || m === 'system') ? m : 'dark';
+  }
+  function getStoredScheme() { return safeGet(STORAGE_SCHEME_KEY) || DEFAULT_SCHEME; }
+  function isSurpriseMode() { return safeGet(STORAGE_SURPRISE_KEY) === '1'; }
+
+  // ---------- Resolve + Apply ----------
+  function resolveSystemMode() {
+    try {
+      return (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+    } catch (e) { return 'dark'; }
+  }
+
+  function applyDisplayMode(mode, persist) {
+    var resolved = mode === 'system' ? resolveSystemMode() : mode;
+    document.documentElement.setAttribute('data-theme', resolved);
+    document.documentElement.setAttribute('data-display-mode', mode);
+    if (document.body) document.body.setAttribute('data-theme', resolved); // legacy mirror
+    if (persist !== false) safeSet(STORAGE_MODE_KEY, mode);
+    syncModeUI(mode);
+  }
+
+  function applyColorScheme(schemeId, opts) {
+    opts = opts || {};
+    var palette = getPalette(schemeId) || getPalette(DEFAULT_SCHEME);
+    var rootStyle = document.documentElement.style;
+    var rgb = hexToRgb(palette.primary);
+
+    rootStyle.setProperty('--color-primary', palette.primary);
+    rootStyle.setProperty('--color-primary-hover', palette.hover);
+    rootStyle.setProperty('--color-primary-light', mixHex(palette.primary, '#ffffff', 0.72));
+    rootStyle.setProperty('--color-primary-rgb', rgb.r + ',' + rgb.g + ',' + rgb.b);
+    rootStyle.setProperty('--color-primary-glow', toRgba(palette.primary, 0.14));
+    rootStyle.setProperty('--color-primary-glow-strong', toRgba(palette.primary, 0.32));
+
+    document.documentElement.setAttribute('data-color-scheme', palette.id);
+
+    if (opts.persist !== false) {
+      safeSet(STORAGE_SCHEME_KEY, palette.id);
+      safeSet(STORAGE_SURPRISE_KEY, opts.surprise ? '1' : '0');
+    }
+    syncSchemeUI();
+    return palette.id;
+  }
+
+  function applySurprise(persist, excludeId) {
+    var id = randomPaletteId(excludeId);
+    applyColorScheme(id, { persist: persist, surprise: true });
+    return id;
+  }
+
+  // ---------- Init: runs immediately, synchronously, before paint ----------
+  function init() {
+    var mode = getStoredMode();
+    applyDisplayMode(mode, false);
+
+    if (isSurpriseMode()) {
+      applySurprise(false, null); // fresh random pick "every visit / login"
+    } else {
+      applyColorScheme(getStoredScheme(), { persist: false });
+    }
+
+    try {
+      var mq = window.matchMedia('(prefers-color-scheme: dark)');
+      var onSystemChange = function () {
+        if (getStoredMode() === 'system') applyDisplayMode('system', false);
+      };
+      if (mq.addEventListener) mq.addEventListener('change', onSystemChange);
+      else if (mq.addListener) mq.addListener(onSystemChange);
+    } catch (e) { /* matchMedia unsupported - degrade gracefully */ }
+  }
+
+  init(); // <-- executes immediately while parsing <head>, before <body> paints (no FOUC)
+
+  // ================================================================
+  // UI: Appearance Drawer (built lazily, after DOM is ready)
+  // ================================================================
+  var drawerBuilt = false;
+
+  function buildDrawer() {
+    if (drawerBuilt || document.getElementById('fmsAppearanceDrawer')) { drawerBuilt = true; return; }
+    drawerBuilt = true;
+
+    var html =
+      '<div class="appearance-overlay" id="fmsAppearanceOverlay" onclick="FMSTheme.closeDrawer()"></div>' +
+      '<div class="appearance-drawer" id="fmsAppearanceDrawer" role="dialog" aria-label="Appearance settings">' +
+        '<div class="appearance-drawer-header">' +
+          '<div class="appearance-drawer-title"><span class="material-icons-round">palette</span>Appearance</div>' +
+          '<button class="icon-btn" onclick="FMSTheme.closeDrawer()" title="Close"><span class="material-icons-round">close</span></button>' +
+        '</div>' +
+        '<div class="appearance-drawer-body">' +
+          '<div class="appearance-section">' +
+            '<div class="appearance-section-title">Display Mode</div>' +
+            '<div class="display-mode-tiles" id="fmsDisplayModeTiles"></div>' +
+          '</div>' +
+          '<div class="appearance-section">' +
+            '<div class="appearance-section-title">Color Scheme</div>' +
+            '<div class="color-scheme-grid" id="fmsColorGrid"></div>' +
+          '</div>' +
+          '<div class="appearance-section">' +
+            '<div class="appearance-section-title">Live Preview</div>' +
+            '<div class="live-preview-box">' +
+              '<button class="preview-btn" type="button">Primary Button</button>' +
+              '<span class="preview-badge">Active Badge</span>' +
+              '<a href="javascript:void(0)" class="preview-link">Active Link</a>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+
+    document.body.insertAdjacentHTML('beforeend', html);
+    document.getElementById('fmsAppearanceDrawer').addEventListener('click', function (e) { e.stopPropagation(); });
+  }
+
+  function renderDisplayModeTiles() {
+    var wrap = document.getElementById('fmsDisplayModeTiles');
+    if (!wrap) return;
+    var current = document.documentElement.getAttribute('data-display-mode') || getStoredMode();
+    var modes = [
+      { id: 'light', icon: 'light_mode', label: 'Light', desc: 'Bright & clean' },
+      { id: 'dark', icon: 'dark_mode', label: 'Dark', desc: 'Easy on the eyes' },
+      { id: 'system', icon: 'desktop_windows', label: 'System', desc: 'Matches your OS' }
+    ];
+    wrap.innerHTML = modes.map(function (m) {
+      return '<button type="button" class="mode-tile' + (current === m.id ? ' active' : '') + '" onclick="FMSTheme.setDisplayMode(\'' + m.id + '\')">' +
+        '<span class="material-icons-round">' + m.icon + '</span>' +
+        '<span class="mode-tile-label">' + m.label + '</span>' +
+        '<span class="mode-tile-desc">' + m.desc + '</span>' +
+        '</button>';
+    }).join('');
+  }
+
+  function renderColorGrid() {
+    var wrap = document.getElementById('fmsColorGrid');
+    if (!wrap) return;
+    var currentScheme = document.documentElement.getAttribute('data-color-scheme');
+    var surprise = isSurpriseMode();
+
+    var html =
+      '<button type="button" class="color-card surprise-card' + (surprise ? ' active' : '') + '" onclick="FMSTheme.selectSurprise()">' +
+        '<span class="color-swatch surprise-swatch"></span>' +
+        '<span class="color-card-name">Surprise Me</span>' +
+        '<span class="color-card-sub">A new colour every visit</span>' +
+        (surprise ? '<span class="material-icons-round color-card-check">check_circle</span>' : '') +
+      '</button>';
+
+    PALETTES.forEach(function (p) {
+      var isActive = !surprise && currentScheme === p.id;
+      html += '<button type="button" class="color-card' + (isActive ? ' active' : '') + '" onclick="FMSTheme.selectScheme(\'' + p.id + '\')">' +
+        '<span class="color-swatch" style="background:linear-gradient(135deg,' + p.primary + ',' + p.hover + ');"></span>' +
+        '<span class="color-card-name">' + p.name + '</span>' +
+        (isActive ? '<span class="material-icons-round color-card-check">check_circle</span>' : '') +
+        '</button>';
+    });
+
+    wrap.innerHTML = html;
+  }
+
+  function syncModeUI() {
+    var resolved = document.documentElement.getAttribute('data-theme') || 'dark';
+    var icon = document.getElementById('themeIcon');
+    if (icon) icon.textContent = resolved === 'dark' ? 'light_mode' : 'dark_mode';
+    renderDisplayModeTiles();
+  }
+
+  function syncSchemeUI() { renderColorGrid(); }
+
+  function openDrawer() {
+    buildDrawer();
+    renderDisplayModeTiles();
+    renderColorGrid();
+    document.getElementById('fmsAppearanceOverlay').classList.add('active');
+    document.getElementById('fmsAppearanceDrawer').classList.add('open');
+  }
+  function closeDrawer() {
+    var overlay = document.getElementById('fmsAppearanceOverlay');
+    var drawer = document.getElementById('fmsAppearanceDrawer');
+    if (overlay) overlay.classList.remove('active');
+    if (drawer) drawer.classList.remove('open');
+  }
+
+  // ---------- Public API ----------
+  window.FMSTheme = {
+    palettes: PALETTES,
+    setDisplayMode: function (mode) { applyDisplayMode(mode, true); },
+    selectScheme: function (id) { applyColorScheme(id, { persist: true, surprise: false }); },
+    selectSurprise: function () { applySurprise(true, document.documentElement.getAttribute('data-color-scheme')); },
+    openDrawer: openDrawer,
+    closeDrawer: closeDrawer,
+    getCurrentScheme: function () { return document.documentElement.getAttribute('data-color-scheme'); },
+    getCurrentMode: function () { return document.documentElement.getAttribute('data-display-mode'); },
+    getResolvedTheme: function () { return document.documentElement.getAttribute('data-theme'); }
+  };
+
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeDrawer(); });
+  document.addEventListener('DOMContentLoaded', function () { buildDrawer(); });
+
+})();
+</script>

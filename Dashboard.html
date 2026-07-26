@@ -2,6 +2,7 @@
 <html>
 <head>
   <base target="_top">
+  <?!= include('ThemeEngine') ?>
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
   <?!= include('Styles') ?>
@@ -24,6 +25,9 @@
       </div>
       <button class="icon-btn" onclick="toggleTheme()" title="Toggle Theme">
         <span class="material-icons-round" id="themeIcon">light_mode</span>
+      </button>
+      <button class="icon-btn" onclick="FMSTheme.openDrawer()" title="Appearance">
+        <span class="material-icons-round">palette</span>
       </button>
       <div class="topbar-clock" title="Live clock & last data sync time">
         <span class="material-icons-round sync-icon" id="syncIcon">sync</span>
@@ -53,6 +57,12 @@
     <div class="sidebar-nav" id="sidebarNav">
       <div style="text-align:center; padding:40px 20px; color:var(--text-muted); font-size:12px;">
         Loading permissions...
+      </div>
+    </div>
+    <div class="sidebar-footer">
+      <div class="nav-item" onclick="FMSTheme.openDrawer()">
+        <span class="material-icons-round">palette</span>
+        <span>Appearance</span>
       </div>
     </div>
   </div>

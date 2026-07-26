@@ -9,6 +9,8 @@
 // Dashboard.html   - Main dashboard after login
 // Styles.html      - Shared CSS styles (included via include())
 // Scripts.html     - Shared JS scripts (included via include())
+// ThemeEngine.html - Appearance & Dynamic Color Scheme system (FOUC-safe,
+//                    included FIRST in <head> on both Login + Dashboard)
 // TAT_Calculator.gs - TAT calculation functions
 // WorkflowEngine.gs - Pending list / popup form / step submission logic
 //
