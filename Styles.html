@@ -481,8 +481,12 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
    full line of vertical space so more table rows fit on screen). */
 .status-tabs-row {
   display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; margin-bottom: 8px; flex-wrap: wrap; flex-shrink: 0;
+  gap: 12px; margin-bottom: 8px; flex-shrink: 0;
+  /* Never wrap to a second line on desktop - scroll horizontally instead
+     if the window is too narrow to fit title + all status tabs. */
+  flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
 }
+.status-tabs-row::-webkit-scrollbar { display: none; }
 .table-page-title {
   display: flex; align-items: center; gap: 6px; font-size: calc(12.5px * var(--content-font-scale));
   color: var(--text-secondary); flex-shrink: 0; white-space: nowrap;
@@ -505,7 +509,13 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
 }
 .status-tab:not(.active) .status-tab-count { background: var(--border); }
 
-.table-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; flex-shrink: 0; }
+.table-toolbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; flex-shrink: 0;
+  /* Same single-line rule as the topbar/status-tabs-row - scrolls
+     horizontally on narrow screens instead of wrapping to a 2nd line. */
+  flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+}
+.table-toolbar::-webkit-scrollbar { display: none; }
 .table-search {
   flex: 1; min-width: 200px; display: flex; align-items: center; gap: 8px;
   background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-sm);
@@ -608,12 +618,6 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
 tr.row-overdue td { background: rgba(255,82,82,0.06); }
 tr.row-overdue:hover td { background: rgba(255,82,82,0.12); }
 tr.row-overdue td.col-serial { border-left: 3px solid var(--danger); }
-.status-badge-overdue {
-  display: inline-flex; align-items: center; gap: 3px; padding: 3px 8px; margin-right: 6px;
-  border-radius: 7px; background: rgba(255,82,82,0.14); color: var(--danger);
-  font-size: calc(9.5px * var(--content-font-scale)); font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px;
-}
-.status-badge-overdue .material-icons-round { font-size: 12px !important; }
 .status-tab-overdue { color: var(--danger) !important; border-color: rgba(255,82,82,0.3) !important; }
 .status-tab-overdue:hover { border-color: var(--danger) !important; }
 .status-tab-overdue.active { background: linear-gradient(135deg, #ff5252, #d32f2f) !important; color: #fff !important; }
@@ -679,6 +683,9 @@ tr.row-overdue td.col-serial { border-left: 3px solid var(--danger); }
 .home-stat-card.stat-completed .material-icons-round { color: var(--success); background: rgba(0,230,118,0.12); }
 .home-stat-card.stat-total .material-icons-round { color: var(--color-primary); background: var(--color-primary-glow); }
 .home-stat-count { font-size: 24px; font-weight: 700; color: var(--text-primary); line-height: 1.1; }
+.home-stat-pct { font-size: 12px; font-weight: 600; color: var(--text-muted); margin-left: 6px; }
+.stat-pending .home-stat-pct { color: var(--warning); }
+.stat-completed .home-stat-pct { color: var(--success); }
 .home-stat-label { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
 
 .home-group { margin-bottom: 22px; }
@@ -914,6 +921,12 @@ tr.row-overdue td.col-serial { border-left: 3px solid var(--danger); }
 @media (max-width: 768px) {
   .topbar { padding: 0 10px; left: 0; } /* no persistent rail reserved on mobile - topbar spans full width */
   .main-content { padding: 10px 12px; margin-left: 0; }
+  /* On phones, allow these two toolbars to wrap instead of forcing a tiny
+     horizontal scroll for every control - the topbar itself still stays
+     single-line (least essential items just hide there instead, see
+     below), but status tabs + search toolbar are less critical to keep
+     glued to one line at this size. */
+  .status-tabs-row, .table-toolbar { flex-wrap: wrap; overflow-x: visible; }
   /* On narrow screens, keep everything on one line (per user request) by
      shrinking non-essential text instead of hiding/wrapping it. */
   .topbar-title { font-size: 12.5px; }
@@ -953,7 +966,6 @@ tr.row-overdue td.col-serial { border-left: 3px solid var(--danger); }
      compact so the Action column doesn't dominate the width. */
   .table-scroll-wrap { -webkit-overflow-scrolling: touch; }
   .btn-fill { padding: 5px 10px; }
-  .status-badge-overdue { display: block; width: fit-content; margin: 0 0 4px 0; }
 
   .pagination-controls { flex-wrap: wrap; justify-content: center; }
   .page-size-select { width: 100%; justify-content: space-between; }

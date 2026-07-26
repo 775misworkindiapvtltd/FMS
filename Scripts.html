@@ -328,10 +328,16 @@ function renderHomeDashboard(res) {
     '<p class="subtitle">Here\'s a summary of everything assigned to you.</p></div>' +
     '</div>';
 
+  var totalPending = res.totalPending || 0;
+  var totalCompleted = res.totalCompleted || 0;
+  var grandTotal = totalPending + totalCompleted;
+  var pendingPct = grandTotal > 0 ? Math.round((totalPending / grandTotal) * 100) : 0;
+  var completedPct = grandTotal > 0 ? Math.round((totalCompleted / grandTotal) * 100) : 0;
+
   html += '<div class="home-stats-row">';
-  html += homeStatCardHtml('Pending', res.totalPending || 0, 'pending_actions', 'stat-pending');
-  html += homeStatCardHtml('Completed', res.totalCompleted || 0, 'task_alt', 'stat-completed');
-  html += homeStatCardHtml('Total Items', (res.totalPending || 0) + (res.totalCompleted || 0), 'inventory_2', 'stat-total');
+  html += homeStatCardHtml('Pending', totalPending, 'pending_actions', 'stat-pending', pendingPct);
+  html += homeStatCardHtml('Completed', totalCompleted, 'task_alt', 'stat-completed', completedPct);
+  html += homeStatCardHtml('Total Items', grandTotal, 'inventory_2', 'stat-total', null);
   html += '</div>';
 
   if (!res.groups || res.groups.length === 0) {
@@ -352,10 +358,11 @@ function renderHomeDashboard(res) {
   main.innerHTML = html;
 }
 
-function homeStatCardHtml(label, count, icon, extraClass) {
+function homeStatCardHtml(label, count, icon, extraClass, pct) {
+  var pctHtml = (pct !== null && pct !== undefined) ? '<span class="home-stat-pct">' + pct + '%</span>' : '';
   return '<div class="home-stat-card ' + extraClass + '">' +
     '<span class="material-icons-round">' + icon + '</span>' +
-    '<div><div class="home-stat-count">' + count + '</div><div class="home-stat-label">' + escapeHtml(label) + '</div></div>' +
+    '<div><div class="home-stat-count">' + count + pctHtml + '</div><div class="home-stat-label">' + escapeHtml(label) + '</div></div>' +
     '</div>';
 }
 
@@ -364,7 +371,8 @@ function homeStepCardHtml(headerName, stepEntry) {
   var pending = stepEntry.pending || 0;
   var completed = stepEntry.completed || 0;
   var total = pending + completed;
-  var pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+  var completedPct = total > 0 ? Math.round((completed / total) * 100) : 0;
+  var pendingPct = total > 0 ? (100 - completedPct) : 0;
 
   var html = '<div class="home-step-card' + (pending > 0 ? ' has-pending' : '') + '" onclick="openPage(\'' + escapeAttr(stepEntry.step) + '\', \'' + escapeAttr(headerName) + '\')">';
   html += '<div class="home-step-card-title">' + escapeHtml(stepEntry.step) + '</div>';
@@ -373,10 +381,10 @@ function homeStepCardHtml(headerName, stepEntry) {
     html += '<div class="home-step-card-error">' + escapeHtml(stepEntry.error) + '</div>';
   } else {
     html += '<div class="home-step-card-counts">' +
-      '<span class="hs-pending">' + pending + ' Pending</span>' +
-      '<span class="hs-completed">' + completed + ' Done</span>' +
+      '<span class="hs-pending">' + pending + ' Pending (' + pendingPct + '%)</span>' +
+      '<span class="hs-completed">' + completed + ' Done (' + completedPct + '%)</span>' +
       '</div>';
-    html += '<div class="home-step-progress"><div class="home-step-progress-fill" style="width:' + pct + '%"></div></div>';
+    html += '<div class="home-step-progress"><div class="home-step-progress-fill" style="width:' + completedPct + '%"></div></div>';
   }
 
   html += '</div>';
@@ -732,7 +740,8 @@ function renderDataTable(headerName, stepName) {
       });
       html += '<td class="col-action">';
       if (r.status === 'pending') {
-        if (r.overdue) html += '<span class="status-badge-overdue" title="Planned date has passed"><span class="material-icons-round">warning</span>Overdue</span>';
+        // No "Overdue" text/badge - the red row tint (tr.row-overdue) is
+        // the only visual indicator, per user request.
         html += '<button class="btn-fill" onclick="openStepForm(\'' + escapeAttr(headerName) + '\',\'' + escapeAttr(stepName) + '\',' + r.row + ')">Fill</button>';
       } else {
         html += '<span class="status-badge-done">Done</span>';
@@ -752,7 +761,18 @@ function renderDataTable(headerName, stepName) {
   html += '<button class="page-btn" ' + (t.page >= totalPages ? 'disabled' : '') + ' onclick="onPageChange(' + (t.page + 1) + ')">Next</button>';
   html += '</div></div>';
 
+  // Preserve the table's horizontal scroll position across re-renders
+  // (sorting, filtering, searching, resizing, etc. all rebuild this HTML
+  // from scratch, which would otherwise reset scrollLeft back to 0 every
+  // time - very disorienting if the user had scrolled right to see a
+  // far-right column before clicking a header to sort it).
+  var existingWrap = document.querySelector('#tableContainer .table-scroll-wrap');
+  var savedScrollLeft = existingWrap ? existingWrap.scrollLeft : 0;
+
   document.getElementById('tableContainer').innerHTML = html;
+
+  var newWrap = document.querySelector('#tableContainer .table-scroll-wrap');
+  if (newWrap && savedScrollLeft) newWrap.scrollLeft = savedScrollLeft;
 }
 
 // ===== COLUMN SHOW/HIDE PANEL =====
