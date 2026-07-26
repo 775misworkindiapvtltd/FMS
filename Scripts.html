@@ -127,18 +127,23 @@ function silentRefreshCurrentView() {
 }
 
 // ===== SIDEBAR =====
+// The sidebar is now an always-visible "icon rail" that expands to show
+// full labels automatically on mouse hover (pure CSS :hover) - no click
+// needed. The topbar menu button / mobile flow instead toggles a "pinned"
+// state, which forces the expanded view to stay open (used on touch
+// devices where there's no hover, and as a manual pin/unpin on desktop).
 function toggleSidebar() {
   if (FMS.sidebarOpen) closeSidebar(); else openSidebar();
 }
 
 function openSidebar() {
-  document.getElementById('sidebar').classList.add('open');
+  document.getElementById('sidebar').classList.add('pinned');
   document.getElementById('sidebarOverlay').classList.add('active');
   FMS.sidebarOpen = true;
 }
 
 function closeSidebar() {
-  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebar').classList.remove('pinned');
   document.getElementById('sidebarOverlay').classList.remove('active');
   FMS.sidebarOpen = false;
 }
@@ -174,13 +179,14 @@ function renderSidebar(permissions) {
   for (var header in permissions) {
     var items = permissions[header];
     html += '<div class="nav-group">';
-    html += '<div class="nav-group-header" onclick="toggleGroup(this)">';
+    html += '<div class="nav-group-header" onclick="toggleGroup(this)" title="' + escapeAttr(header) + '">';
+    html += '<span class="material-icons-round group-icon">folder</span>';
     html += '<span class="header-text">' + escapeHtml(header) + '</span>';
     html += '<span class="material-icons-round arrow">expand_more</span>';
     html += '</div>';
     html += '<div class="nav-group-items">';
     for (var i = 0; i < items.length; i++) {
-      html += '<div class="nav-item" onclick="openPage(\'' + escapeAttr(items[i]) + '\', \'' + escapeAttr(header) + '\')">';
+      html += '<div class="nav-item" onclick="openPage(\'' + escapeAttr(items[i]) + '\', \'' + escapeAttr(header) + '\')" title="' + escapeAttr(items[i]) + '">';
       html += '<span class="material-icons-round">chevron_right</span>';
       html += '<span>' + escapeHtml(items[i]) + '</span>';
       html += '</div>';
