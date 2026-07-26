@@ -479,14 +479,17 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
    page - no big heading, no wasted top whitespace (per user request). */
 .table-page { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 
-/* Breadcrumb title + status tabs share ONE row now (moved up, saves a
-   full line of vertical space so more table rows fit on screen). */
+/* Everything above the table lives in ONE single toolbar line now:
+   breadcrumb title -> status tabs (Pending/Completed/All/Overdue) ->
+   global search -> column-toggle -> page-size. The table's own header
+   row (thead) follows IMMEDIATELY after this line with no extra gap. */
 .status-tabs-row {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; margin-bottom: 8px; flex-shrink: 0;
+  display: flex; align-items: center;
+  gap: 10px; margin-bottom: 0; flex-shrink: 0;
   /* Never wrap to a second line on desktop - scroll horizontally instead
-     if the window is too narrow to fit title + all status tabs. */
+     if the window is too narrow to fit everything. */
   flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+  padding-bottom: 8px;
 }
 .status-tabs-row::-webkit-scrollbar { display: none; }
 .table-page-title {
@@ -497,12 +500,12 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
 .table-page-title strong { color: var(--text-primary); font-weight: 600; font-size: calc(13px * var(--content-font-scale)); }
 .breadcrumb-sep { color: var(--text-muted); }
 
-.status-tabs { display: flex; gap: 6px; flex-wrap: wrap; flex-shrink: 0; }
+.status-tabs { display: flex; gap: 6px; flex-shrink: 0; white-space: nowrap; }
 .status-tab {
   padding: 5px 12px; border-radius: 16px; border: 1px solid var(--border);
   background: var(--bg-card); color: var(--text-secondary); cursor: pointer;
   font-family: 'Poppins', sans-serif; font-size: calc(11.5px * var(--content-font-scale)); font-weight: 500; transition: var(--transition);
-  display: flex; align-items: center; gap: 5px;
+  display: flex; align-items: center; gap: 5px; flex-shrink: 0;
 }
 .status-tab:hover { border-color: var(--accent); color: var(--accent); }
 .status-tab.active { background: var(--accent-gradient); color: #fff; border-color: transparent; }
@@ -511,24 +514,19 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
 }
 .status-tab:not(.active) .status-tab-count { background: var(--border); }
 
-.table-toolbar {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; flex-shrink: 0;
-  /* Same single-line rule as the topbar/status-tabs-row - scrolls
-     horizontally on narrow screens instead of wrapping to a 2nd line. */
-  flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
-}
-.table-toolbar::-webkit-scrollbar { display: none; }
+/* Search box sits right after the status tabs, and flexes to fill
+   whatever space remains before the column-toggle/page-size controls. */
 .table-search {
-  flex: 1; min-width: 200px; display: flex; align-items: center; gap: 8px;
+  flex: 1 1 180px; min-width: 140px; max-width: 320px; display: flex; align-items: center; gap: 8px;
   background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-sm);
-  padding: 6px 12px;
+  padding: 6px 12px; flex-shrink: 1;
 }
 .table-search .material-icons-round { font-size: 16px; color: var(--text-muted); }
 .table-search input {
   border: none; background: transparent; outline: none; color: var(--text-primary);
   font-family: 'Poppins', sans-serif; font-size: calc(12.5px * var(--content-font-scale)); width: 100%;
 }
-.table-toolbar-right { display: flex; align-items: center; gap: 10px; }
+.table-toolbar-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; margin-left: auto; }
 .page-size-select {
   font-size: calc(11.5px * var(--content-font-scale)); color: var(--text-secondary); display: flex; align-items: center; gap: 6px; white-space: nowrap;
 }
@@ -947,12 +945,12 @@ tr.row-overdue td.col-serial { border-left: 3px solid var(--danger); }
 @media (max-width: 768px) {
   .topbar { padding: 0 10px; left: 0; } /* no persistent rail reserved on mobile - topbar spans full width */
   .main-content { padding: 10px 12px; margin-left: 0; }
-  /* On phones, allow these two toolbars to wrap instead of forcing a tiny
-     horizontal scroll for every control - the topbar itself still stays
-     single-line (least essential items just hide there instead, see
-     below), but status tabs + search toolbar are less critical to keep
+  /* On phones, allow the single toolbar line to wrap instead of forcing a
+     tiny horizontal scroll for every control - the topbar itself still
+     stays single-line (least essential items just hide there instead,
+     see below), but this combined toolbar is less critical to keep
      glued to one line at this size. */
-  .status-tabs-row, .table-toolbar { flex-wrap: wrap; overflow-x: visible; }
+  .status-tabs-row { flex-wrap: wrap; overflow-x: visible; padding-bottom: 0; }
   /* On narrow screens, keep everything on one line (per user request) by
      shrinking non-essential text instead of hiding/wrapping it. */
   .topbar-title { font-size: 12.5px; }
@@ -966,10 +964,10 @@ tr.row-overdue td.col-serial { border-left: 3px solid var(--danger); }
   .form-fields-grid { grid-template-columns: 1fr; } /* 2-col form collapses to 1-col on phones */
   .modal-header, .modal-body, .modal-footer { padding: 14px 16px; }
 
-  .table-toolbar { flex-direction: column; align-items: stretch; }
-  .table-toolbar-right { flex-wrap: wrap; }
-  .status-tabs-row { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .status-tabs-row { flex-direction: column; align-items: stretch; gap: 8px; }
+  .table-toolbar-right { flex-wrap: wrap; margin-left: 0; }
   .status-tabs { width: 100%; }
+  .table-search { max-width: 100%; }
 
   .appearance-drawer { width: 100%; max-width: 100%; }
   .display-mode-tiles, .color-scheme-grid { grid-template-columns: repeat(2, 1fr); }

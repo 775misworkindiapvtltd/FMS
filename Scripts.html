@@ -691,8 +691,10 @@ function renderDataTable(headerName, stepName) {
 
   var html = '';
 
-  // ---- Breadcrumb title + Status filter tabs on the SAME row (saves a
-  // whole line of vertical space vs. having the title on its own row) ----
+  // ---- EVERYTHING on ONE single line: breadcrumb title -> status tabs
+  // (Pending/Completed/All/Overdue) -> global search -> column-toggle ->
+  // page-size. The table's own header row follows IMMEDIATELY after this
+  // one toolbar line - no separate rows, no extra gap. ----
   html += '<div class="status-tabs-row">';
   html += '<div class="table-page-title"><span class="material-icons-round">assignment</span>' +
     '<strong>' + escapeHtml(stepName) + '</strong><span class="breadcrumb-sep">/</span>' + escapeHtml(headerName) + '</div>';
@@ -705,10 +707,6 @@ function renderDataTable(headerName, stepName) {
       '<span class="material-icons-round" style="font-size:13px;">warning</span>Overdue <span class="status-tab-count">' + overdueCount + '</span></button>';
   }
   html += '</div>';
-  html += '</div>';
-
-  // ---- Global search + column visibility toggle + page size ----
-  html += '<div class="table-toolbar">';
   html += '<div class="table-search"><span class="material-icons-round">search</span>' +
     '<input type="text" id="tableGlobalSearch" placeholder="Search all columns..." value="' + escapeAttr(t.globalSearch) + '" oninput="onGlobalSearch(this.value)"></div>';
   html += '<div class="table-toolbar-right">';
@@ -723,7 +721,7 @@ function renderDataTable(headerName, stepName) {
   html += '</div>';
   html += '</div>';
 
-  // ---- Table ----
+  // ---- Table (immediately follows the single toolbar line above) ----
   // Every column gets an EXPLICIT pixel width (a sensible default of 150px
   // if the user hasn't dragged it yet). Combined with table-layout:fixed
   // and the table itself being width:auto (not 100%), this guarantees that
