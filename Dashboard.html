@@ -16,13 +16,13 @@
 </head>
 <body data-theme="dark" class="font-medium">
 
-  <!-- TOP BAR -->
-  <div class="topbar">
+  <!-- PROFESSIONAL APPLICATION HEADER -->
+  <header class="topbar">
     <div class="topbar-left">
-      <button class="icon-btn" onclick="toggleSidebar()" title="Menu">
-        <span class="material-icons-round">menu</span>
+      <button class="icon-btn topbar-menu-btn" onclick="toggleSidebar()" title="Collapse navigation" aria-label="Toggle navigation">
+        <span class="material-icons-round">menu_open</span>
       </button>
-      <div class="topbar-logo-box">
+      <div class="topbar-logo-box" aria-hidden="true">
         <span class="material-icons-round">checkroom</span>
       </div>
       <div class="topbar-title-block">
@@ -31,54 +31,41 @@
       </div>
     </div>
     <div class="topbar-right">
-      <div class="font-controls">
-        <button class="font-btn" onclick="setFontSize('small')" title="Small">A</button>
-        <button class="font-btn active" onclick="setFontSize('medium')" title="Medium">A+</button>
-        <button class="font-btn" onclick="setFontSize('large')" title="Large">A++</button>
-      </div>
-      <button class="icon-btn" onclick="toggleTheme()" title="Toggle Theme">
-        <span class="material-icons-round" id="themeIcon">light_mode</span>
+      <button class="topbar-action-btn" onclick="FMSTheme.openDrawer()" title="Display and appearance settings">
+        <span class="material-icons-round">tune</span>
+        <span>Appearance</span>
       </button>
-      <button class="icon-btn" onclick="FMSTheme.openDrawer()" title="Appearance">
-        <span class="material-icons-round">palette</span>
-      </button>
-      <div class="topbar-clock" title="Current time">
-        <div class="clock-time" id="liveClock">--:--:--</div>
-      </div>
-      <!-- Kept in the DOM (hidden) so existing sync/last-updated JS logic
-           (setSyncingState/setLastUpdatedNow, used for step-table
-           background refreshes) keeps working without errors - the
-           visible "Last Updated" indicator now lives on the Home page
-           itself instead of the topbar, to keep the topbar a clean
-           single row. -->
+      <!-- Retained as hidden compatibility hooks for the existing live-clock
+           and background-sync logic; operational status is shown inside the
+           workspace instead of competing for space in the app header. -->
+      <div id="liveClock" hidden>--:--:--</div>
       <span class="material-icons-round sync-icon" id="syncIcon" style="display:none;">sync</span>
       <span id="lastUpdatedText" style="display:none;">Not synced yet</span>
       <div class="user-avatar-chip" title="Logged in user">
         <div class="user-avatar-initials" id="userInitials">U</div>
         <div class="user-avatar-text">
           <div class="user-avatar-name" id="userDisplay">User</div>
-          <div class="user-avatar-role">FMS Fashion</div>
+          <div class="user-avatar-role">Workflow user</div>
         </div>
       </div>
     </div>
-  </div>
+  </header>
 
   <!-- SIDEBAR OVERLAY -->
   <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
 
-  <!-- SIDEBAR -->
-  <div class="sidebar" id="sidebar">
+  <!-- STABLE COLLAPSIBLE NAVIGATION -->
+  <aside class="sidebar" id="sidebar" aria-label="Main navigation">
     <div class="sidebar-header">
-      <h3>&#9776; Navigation</h3>
-      <!-- Was a "close" (X) icon - didn't make sense on an always-visible
-           hover-expand rail (there's nothing modal to "close"). Replaced
-           with a circular right-arrow expand/pin trigger: click pins the
-           sidebar open (toggleSidebar()) - same action as hovering, but
-           needed for touch devices and as an explicit "lock it open"
-           control. Rotates to point left once expanded/pinned (see CSS),
-           so it always visually indicates what clicking it will do. -->
-      <button class="icon-btn sidebar-toggle-btn" onclick="toggleSidebar()" title="Expand sidebar">
-        <span class="material-icons-round">chevron_right</span>
+      <div class="sidebar-brand">
+        <span class="sidebar-brand-mark material-icons-round">account_tree</span>
+        <div class="sidebar-brand-copy">
+          <strong>FMS Fashion</strong>
+          <span>Workflow Management</span>
+        </div>
+      </div>
+      <button class="icon-btn sidebar-toggle-btn" onclick="toggleSidebar()" title="Collapse navigation" aria-label="Collapse navigation">
+        <span class="material-icons-round">chevron_left</span>
       </button>
     </div>
     <div class="sidebar-nav" id="sidebarNav">
@@ -95,12 +82,12 @@
       </div>
     </div>
     <div class="sidebar-footer">
-      <div class="nav-item" onclick="FMSTheme.openDrawer()">
-        <span class="material-icons-round">palette</span>
+      <div class="nav-item" onclick="FMSTheme.openDrawer()" title="Appearance settings">
+        <span class="material-icons-round">tune</span>
         <span>Appearance</span>
       </div>
     </div>
-  </div>
+  </aside>
 
   <!-- MAIN CONTENT -->
   <div class="main-content" id="mainContent">
@@ -110,6 +97,11 @@
   <?!= include('Scripts') ?>
 
   <script>
+    // Apply stored shell preferences immediately now that the DOM exists;
+    // do not wait for window.onload (which can be delayed by web fonts).
+    initializeSidebar();
+    restoreFontSize();
+
     // Initialize dashboard
     window.onload = function() {
       // Restore the Step/Table view preference BEFORE anything renders, so
@@ -125,7 +117,7 @@
       startLiveClock();
       startAutoRefresh();
       autoShrinkTopbar();
-      window.addEventListener('resize', scheduleTopbarAutoShrink);
+      window.addEventListener('resize', handleDashboardResize);
     };
   </script>
 </body>

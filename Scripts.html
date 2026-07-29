@@ -4,7 +4,7 @@
 // ============================================
 
 var FMS = {
-  sidebarOpen: false,
+  sidebarOpen: true,
   currentTheme: 'dark',
   currentFontSize: 'medium',
   tableCache: {},        // "header|||step" -> { columns, rows, fetchedAt }
@@ -50,6 +50,7 @@ function setViewMode(mode) {
   if (!FMS.currentHeader) return;
 
   if (mode === 'table') {
+    updateTopbarBreadcrumb('All My Steps', FMS.currentHeader);
     loadMultiStepTable(FMS.currentHeader);
   } else {
     // Coming back to Step View: reopen the step the user last worked on
@@ -308,27 +309,78 @@ function silentRefreshCurrentView() {
 }
 
 // ===== SIDEBAR =====
-// The sidebar is now an always-visible "icon rail" that expands to show
-// full labels automatically on mouse hover (pure CSS :hover) - no click
-// needed. The topbar menu button / mobile flow instead toggles a "pinned"
-// state, which forces the expanded view to stay open (used on touch
-// devices where there's no hover, and as a manual pin/unpin on desktop).
+// Desktop uses a deliberate, stable expanded/collapsed state (never
+// hover-expands over the workspace). Mobile uses the same control as an
+// overlay drawer. The desktop preference is remembered between sessions.
+var SIDEBAR_STORAGE_KEY = 'fms_sidebar_state';
+var FONT_SIZE_STORAGE_KEY = 'fms_font_size';
+
+function isMobileLayout() {
+  return window.matchMedia ? window.matchMedia('(max-width: 768px)').matches : window.innerWidth <= 768;
+}
+
+function initializeSidebar() {
+  FMS.wasMobileLayout = isMobileLayout();
+  if (FMS.wasMobileLayout) {
+    closeSidebar(false);
+    return;
+  }
+  var saved = fmsStoreGet(SIDEBAR_STORAGE_KEY);
+  if (saved === 'collapsed') closeSidebar(false);
+  else openSidebar(false);
+}
+
 function toggleSidebar() {
-  if (FMS.sidebarOpen) closeSidebar(); else openSidebar();
+  if (FMS.sidebarOpen) closeSidebar(true); else openSidebar(true);
 }
 
-function openSidebar() {
-  document.getElementById('sidebar').classList.add('pinned');
-  document.getElementById('sidebarOverlay').classList.add('active');
+function updateSidebarControl() {
+  var expanded = FMS.sidebarOpen;
+  var menuIcon = document.querySelector('.topbar-menu-btn .material-icons-round');
+  var sideIcon = document.querySelector('.sidebar-toggle-btn .material-icons-round');
+  var sideButton = document.querySelector('.sidebar-toggle-btn');
+  var menuButton = document.querySelector('.topbar-menu-btn');
+  if (menuIcon) menuIcon.textContent = expanded ? 'menu_open' : 'menu';
+  if (sideIcon) sideIcon.textContent = expanded ? 'chevron_left' : 'chevron_right';
+  if (sideButton) sideButton.title = expanded ? 'Collapse navigation' : 'Expand navigation';
+  if (menuButton) menuButton.title = expanded ? 'Collapse navigation' : 'Expand navigation';
+}
+
+function openSidebar(persist) {
+  var sidebar = document.getElementById('sidebar');
+  var overlay = document.getElementById('sidebarOverlay');
+  if (sidebar) sidebar.classList.add('pinned');
+  document.body.classList.add('sidebar-expanded');
+  if (overlay) overlay.classList.toggle('active', isMobileLayout());
   FMS.sidebarOpen = true;
-  scheduleTopbarAutoShrink(); // sidebar pinned only affects width on mobile; harmless no-op otherwise
+  if (persist !== false && !isMobileLayout()) fmsStoreSet(SIDEBAR_STORAGE_KEY, 'expanded');
+  updateSidebarControl();
+  scheduleTopbarAutoShrink();
 }
 
-function closeSidebar() {
-  document.getElementById('sidebar').classList.remove('pinned');
-  document.getElementById('sidebarOverlay').classList.remove('active');
+function closeSidebar(persist) {
+  var sidebar = document.getElementById('sidebar');
+  var overlay = document.getElementById('sidebarOverlay');
+  if (sidebar) sidebar.classList.remove('pinned');
+  document.body.classList.remove('sidebar-expanded');
+  if (overlay) overlay.classList.remove('active');
   FMS.sidebarOpen = false;
+  if (persist !== false && !isMobileLayout()) fmsStoreSet(SIDEBAR_STORAGE_KEY, 'collapsed');
+  updateSidebarControl();
   scheduleTopbarAutoShrink();
+}
+
+function closeSidebarAfterNavigation() {
+  if (isMobileLayout()) closeSidebar(false);
+}
+
+function handleDashboardResize() {
+  scheduleTopbarAutoShrink();
+  var mobile = isMobileLayout();
+  if (FMS.wasMobileLayout === mobile) return;
+  FMS.wasMobileLayout = mobile;
+  if (mobile) closeSidebar(false);
+  else initializeSidebar();
 }
 
 // ===== THEME =====
@@ -343,15 +395,22 @@ function toggleTheme() {
 }
 
 // ===== FONT SIZE =====
-function setFontSize(size) {
+function restoreFontSize() {
+  var stored = fmsStoreGet(FONT_SIZE_STORAGE_KEY);
+  setFontSize(stored === 'small' || stored === 'large' ? stored : 'medium', false);
+}
+
+function setFontSize(size, persist) {
+  if (size !== 'small' && size !== 'medium' && size !== 'large') size = 'medium';
   document.body.classList.remove('font-small', 'font-medium', 'font-large');
   document.body.classList.add('font-' + size);
   FMS.currentFontSize = size;
-  
+  if (persist !== false) fmsStoreSet(FONT_SIZE_STORAGE_KEY, size);
+
   var btns = document.querySelectorAll('.font-btn');
-  btns.forEach(function(b) { b.classList.remove('active'); });
-  var idx = size === 'small' ? 0 : (size === 'medium' ? 1 : 2);
-  if (btns[idx]) btns[idx].classList.add('active');
+  btns.forEach(function(b) {
+    b.classList.toggle('active', b.getAttribute('data-font-size') === size);
+  });
 }
 
 // ===== SIDEBAR NAVIGATION =====
@@ -395,7 +454,7 @@ function toggleGroup(el) {
 }
 
 function openPage(pageName, headerName) {
-  closeSidebar();
+  closeSidebarAfterNavigation();
 
   // Mark active nav item (Home item included, so it un-highlights too)
   var items = document.querySelectorAll('.nav-item');
@@ -441,7 +500,7 @@ function updateTopbarBreadcrumb(stepName, headerName) {
 
 // ===== HOME DASHBOARD (summary of all assigned Steps) =====
 function goHome() {
-  closeSidebar();
+  closeSidebarAfterNavigation();
   FMS.currentHeader = null;
   FMS.currentStep = null;
   updateTopbarBreadcrumb(null, null);
@@ -468,7 +527,7 @@ function loadHomeDashboard() {
     // "Loading latest data..." in place of a timestamp), then silently
     // fetch the real numbers in the background and update in place the
     // moment they arrive - so the page always feels already-loaded.
-    renderHomeDashboard({ success: true, totalPending: 0, totalCompleted: 0, groups: [] }, true);
+    renderHomeDashboard({ success: true, totalPending: 0, totalCompleted: 0, totalOverdue: 0, groups: [] }, true);
     fetchHomeSummaryInBackground(true);
   }
 }
@@ -525,15 +584,32 @@ function renderHomeDashboard(res, isSkeleton, justUpdated) {
 
   var totalPending = res.totalPending || 0;
   var totalCompleted = res.totalCompleted || 0;
+  var totalOverdue = res.totalOverdue || 0;
   var grandTotal = totalPending + totalCompleted;
   var pendingPct = grandTotal > 0 ? Math.round((totalPending / grandTotal) * 100) : 0;
   var completedPct = grandTotal > 0 ? Math.round((totalCompleted / grandTotal) * 100) : 0;
 
   html += '<div class="home-stats-row' + (justUpdated ? ' stats-updated-flash' : '') + '">';
-  html += homeStatCardHtml('Pending', totalPending, 'pending_actions', 'stat-pending', pendingPct);
-  html += homeStatCardHtml('Completed', totalCompleted, 'task_alt', 'stat-completed', completedPct);
-  html += homeStatCardHtml('Total Items', grandTotal, 'inventory_2', 'stat-total', null);
+  html += homeStatCardHtml('Pending', totalPending, 'pending_actions', 'stat-pending', pendingPct, 'Awaiting your action');
+  html += homeStatCardHtml('Overdue', totalOverdue, 'warning_amber', 'stat-overdue', null, 'Past planned date');
+  html += homeStatCardHtml('Completed', totalCompleted, 'task_alt', 'stat-completed', completedPct, 'Successfully closed');
+  html += homeStatCardHtml('Total Items', grandTotal, 'inventory_2', 'stat-total', null, 'Across your workflows');
   html += '</div>';
+
+  if (totalOverdue > 0 && res.groups && res.groups.length) {
+    html += '<section class="home-attention-panel">' +
+      '<div class="home-section-heading"><div><span class="section-eyebrow">Priority</span><h3>Needs Your Attention</h3></div>' +
+      '<span class="attention-summary">' + totalOverdue + ' overdue</span></div>' +
+      '<div class="attention-items">';
+    res.groups.forEach(function(group) {
+      (group.steps || []).forEach(function(stepEntry) {
+        if ((stepEntry.overdue || 0) > 0) html += homeAttentionItemHtml(group.header, stepEntry);
+      });
+    });
+    html += '</div></section>';
+  }
+
+  html += '<div class="home-section-heading workflow-heading"><div><span class="section-eyebrow">Workspace</span><h3>Workflow Overview</h3></div></div>';
 
   if (!res.groups || res.groups.length === 0) {
     if (isSkeleton) {
@@ -568,36 +644,50 @@ function renderHomeDashboard(res, isSkeleton, justUpdated) {
   }
 }
 
-function homeStatCardHtml(label, count, icon, extraClass, pct) {
+function homeStatCardHtml(label, count, icon, extraClass, pct, hint) {
   var pctHtml = (pct !== null && pct !== undefined) ? '<span class="home-stat-pct">' + pct + '%</span>' : '';
   return '<div class="home-stat-card ' + extraClass + '">' +
-    '<span class="material-icons-round">' + icon + '</span>' +
-    '<div><div class="home-stat-count">' + count + pctHtml + '</div><div class="home-stat-label">' + escapeHtml(label) + '</div></div>' +
+    '<span class="material-icons-round home-stat-icon">' + icon + '</span>' +
+    '<div class="home-stat-content"><div class="home-stat-label">' + escapeHtml(label) + '</div>' +
+    '<div class="home-stat-count">' + count + pctHtml + '</div>' +
+    '<div class="home-stat-hint">' + escapeHtml(hint || '') + '</div></div>' +
     '</div>';
+}
+
+function homeAttentionItemHtml(headerName, stepEntry) {
+  return '<button type="button" class="attention-item" onclick="openPage(\'' + escapeAttr(stepEntry.step) + '\', \'' + escapeAttr(headerName) + '\')">' +
+    '<span class="attention-icon material-icons-round">priority_high</span>' +
+    '<span class="attention-copy"><strong>' + escapeHtml(stepEntry.step) + '</strong><small>' + escapeHtml(headerName) + '</small></span>' +
+    '<span class="attention-count">' + (stepEntry.overdue || 0) + ' overdue</span>' +
+    '<span class="material-icons-round attention-arrow">arrow_forward</span>' +
+    '</button>';
 }
 
 function homeStepCardHtml(headerName, stepEntry) {
   var hasError = !!stepEntry.error;
   var pending = stepEntry.pending || 0;
   var completed = stepEntry.completed || 0;
+  var overdue = stepEntry.overdue || 0;
   var total = pending + completed;
   var completedPct = total > 0 ? Math.round((completed / total) * 100) : 0;
-  var pendingPct = total > 0 ? (100 - completedPct) : 0;
 
-  var html = '<div class="home-step-card' + (pending > 0 ? ' has-pending' : '') + '" onclick="openPage(\'' + escapeAttr(stepEntry.step) + '\', \'' + escapeAttr(headerName) + '\')">';
-  html += '<div class="home-step-card-title">' + escapeHtml(stepEntry.step) + '</div>';
+  var html = '<article class="home-step-card' + (pending > 0 ? ' has-pending' : '') + (overdue > 0 ? ' has-overdue' : '') + '" onclick="openPage(\'' + escapeAttr(stepEntry.step) + '\', \'' + escapeAttr(headerName) + '\')">';
+  html += '<div class="home-step-card-head"><div class="home-step-card-title">' + escapeHtml(stepEntry.step) + '</div>' +
+    '<span class="material-icons-round">arrow_outward</span></div>';
 
   if (hasError) {
     html += '<div class="home-step-card-error">' + escapeHtml(stepEntry.error) + '</div>';
   } else {
     html += '<div class="home-step-card-counts">' +
-      '<span class="hs-pending">' + pending + ' Pending (' + pendingPct + '%)</span>' +
-      '<span class="hs-completed">' + completed + ' Done (' + completedPct + '%)</span>' +
+      '<span class="hs-pending">' + pending + ' Pending</span>' +
+      (overdue > 0 ? '<span class="hs-overdue">' + overdue + ' Overdue</span>' : '') +
+      '<span class="hs-completed">' + completed + ' Done</span>' +
       '</div>';
-    html += '<div class="home-step-progress"><div class="home-step-progress-fill" style="width:' + completedPct + '%"></div></div>';
+    html += '<div class="home-step-progress" title="' + completedPct + '% completed"><div class="home-step-progress-fill" style="width:' + completedPct + '%"></div></div>' +
+      '<div class="home-step-card-footer"><span>' + completedPct + '% complete</span><strong>Open step</strong></div>';
   }
 
-  html += '</div>';
+  html += '</article>';
   return html;
 }
 
@@ -737,6 +827,70 @@ function fetchMultiStepTableInBackground(headerName, showErrorsInline) {
  * machinery as the Step View (getFilteredSortedRows, colSearch, colWidths,
  * hiddenCols, pagination) so both views behave identically.
  */
+function hasActiveTableFilters(t) {
+  if (t.globalSearch || t.sortCol !== null || t.filterStatus !== 'pending') return true;
+  for (var key in t.colSearch) {
+    var value = t.colSearch[key];
+    if (typeof value === 'object') {
+      if (value && (value.start || value.end)) return true;
+    } else if (value) return true;
+  }
+  return false;
+}
+
+function tablePageHeaderHtml(headerName, title, subtitle) {
+  return '<div class="table-page-header">' +
+    '<div class="table-page-heading"><span class="table-page-eyebrow">' + escapeHtml(headerName) + '</span>' +
+      '<h1>' + escapeHtml(title) + '</h1><p>' + escapeHtml(subtitle) + '</p></div>' +
+    viewSwitcherHtml() +
+    '</div>';
+}
+
+function tableUtilityToolbarHtml(t, allCount, pendingCount, overdueCount, completedCount) {
+  var hiddenCount = 0;
+  t.columns.forEach(function(col, idx) { if (t.hiddenCols[idx]) hiddenCount++; });
+  var html = '<div class="table-utility-toolbar">';
+  html += '<div class="status-tabs" role="tablist" aria-label="Record status">';
+  html += statusTabHtml('all', 'All', allCount, t.filterStatus);
+  html += statusTabHtml('pending', 'Pending', pendingCount, t.filterStatus);
+  html += '<button class="status-tab status-tab-overdue' + (t.filterStatus === 'overdue' ? ' active' : '') + '" onclick="onStatusFilter(\'overdue\')">' +
+    '<span class="material-icons-round">warning_amber</span>Overdue <span class="status-tab-count">' + overdueCount + '</span></button>';
+  html += statusTabHtml('completed', 'Completed', completedCount, t.filterStatus);
+  html += '</div>';
+  html += '<div class="table-toolbar-actions">';
+  html += '<label class="table-search"><span class="material-icons-round">search</span>' +
+    '<input type="text" id="tableGlobalSearch" aria-label="Search all columns" placeholder="Search records..." value="' + escapeAttr(t.globalSearch) + '" oninput="onGlobalSearch(this.value)"></label>';
+  if (hasActiveTableFilters(t)) {
+    html += '<button type="button" class="toolbar-btn reset-filters-btn" onclick="resetAllFilters()" title="Clear search, filters and sorting">' +
+      '<span class="material-icons-round">filter_alt_off</span><span>Clear</span></button>';
+  }
+  html += '<div class="column-toggle-wrap">' +
+    '<button type="button" class="toolbar-btn columns-button' + (t.columnPanelOpen ? ' active' : '') + '" title="Choose visible columns" aria-expanded="' + (t.columnPanelOpen ? 'true' : 'false') + '" onclick="toggleColumnPanel(event)">' +
+      '<span class="material-icons-round">view_column</span><span>Columns</span>' +
+      (hiddenCount ? '<span class="toolbar-count">' + hiddenCount + '</span>' : '') +
+    '</button>' + renderColumnPanel(t) + '</div>';
+  html += '</div></div>';
+  return html;
+}
+
+function tablePaginationHtml(filteredCount, startIdx, totalPages) {
+  var t = FMS.table;
+  var from = filteredCount === 0 ? 0 : startIdx + 1;
+  var to = Math.min(startIdx + t.pageSize, filteredCount);
+  var html = '<div class="table-pagination">';
+  html += '<span class="pagination-info">Showing <strong>' + from + '–' + to + '</strong> of <strong>' + filteredCount + '</strong> records</span>';
+  html += '<div class="pagination-right">';
+  html += '<label class="page-size-select"><span>Rows per page</span><select id="pageSizeSelect" onchange="onPageSizeChange(this.value)">' +
+    [50, 100, 500, 1000].map(function(n) { return '<option value="' + n + '"' + (t.pageSize === n ? ' selected' : '') + '>' + n + '</option>'; }).join('') +
+    '</select></label>';
+  html += '<div class="pagination-controls">';
+  html += '<button class="page-btn" title="Previous page" ' + (t.page <= 1 ? 'disabled' : '') + ' onclick="onPageChange(' + (t.page - 1) + ')"><span class="material-icons-round">chevron_left</span><span>Previous</span></button>';
+  html += '<span class="page-indicator">Page <strong>' + t.page + '</strong> of ' + totalPages + '</span>';
+  html += '<button class="page-btn" title="Next page" ' + (t.page >= totalPages ? 'disabled' : '') + ' onclick="onPageChange(' + (t.page + 1) + ')"><span>Next</span><span class="material-icons-round">chevron_right</span></button>';
+  html += '</div></div></div>';
+  return html;
+}
+
 function renderMultiStepTable(headerName) {
   var t = FMS.table;
   var allRows = t.rows || [];
@@ -754,34 +908,8 @@ function renderMultiStepTable(headerName) {
   t.columns.forEach(function(col, idx) { if (!t.hiddenCols[idx]) visibleIdx.push(idx); });
 
   var html = '';
-
-  // ---- Toolbar: view switcher -> status tabs -> reset -> search -> cols ----
-  html += '<div class="status-tabs-row">';
-  html += viewSwitcherHtml();
-  html += '<div class="status-tabs">';
-  html += statusTabHtml('all', 'All', allRows.length, t.filterStatus);
-  html += statusTabHtml('pending', 'Pending', pendingCount, t.filterStatus);
-  if (overdueCount > 0) {
-    html += '<button class="status-tab status-tab-overdue' + (t.filterStatus === 'overdue' ? ' active' : '') + '" onclick="onStatusFilter(\'overdue\')">' +
-      '<span class="material-icons-round" style="font-size:13px;">warning</span>Overdue <span class="status-tab-count">' + overdueCount + '</span></button>';
-  }
-  html += statusTabHtml('completed', 'Completed', completedCount, t.filterStatus);
-  html += '</div>';
-  html += '<button type="button" class="reset-filters-btn" onclick="resetAllFilters()" title="Reset all filters back to default">' +
-    '<span class="material-icons-round">restart_alt</span>Reset Filters</button>';
-  html += '<div class="table-search"><span class="material-icons-round">search</span>' +
-    '<input type="text" id="tableGlobalSearch" placeholder="Search all columns..." value="' + escapeAttr(t.globalSearch) + '" oninput="onGlobalSearch(this.value)"></div>';
-  html += '<div class="table-toolbar-right">';
-  html += '<div class="column-toggle-wrap">' +
-    '<button type="button" class="icon-btn" title="Show/Hide Columns" onclick="toggleColumnPanel(event)"><span class="material-icons-round">view_column</span></button>' +
-    renderColumnPanel(t) +
-    '</div>';
-  html += '<div class="page-size-select">Show ' +
-    '<select id="pageSizeSelect" onchange="onPageSizeChange(this.value)">' +
-    [50, 100, 500, 1000].map(function(n) { return '<option value="' + n + '"' + (t.pageSize === n ? ' selected' : '') + '>' + n + '</option>'; }).join('') +
-    '</select> entries</div>';
-  html += '</div>';
-  html += '</div>';
+  html += tablePageHeaderHtml(headerName, 'All My Steps', 'Review and action your permitted workflow steps in one place.');
+  html += tableUtilityToolbarHtml(t, allRows.length, pendingCount, overdueCount, completedCount);
 
   if (!visibleIdx.length) {
     html += '<div class="pending-empty"><span class="material-icons-round">lock</span>' +
@@ -862,7 +990,7 @@ function renderMultiStepTable(headerName) {
       // One chip per step this user owns, in pipeline order
       html += '<td class="col-action"><div class="step-chips">';
       (r.steps || []).forEach(function(st) {
-        var label = 'S' + st.order;
+        var label = 'Step ' + st.order;
         if (st.status === 'pending') {
           html += '<button class="step-chip chip-pending' + (st.overdue ? ' chip-overdue' : '') + '" ' +
             'onclick="openStepForm(\'' + escapeAttr(headerName) + '\',\'' + escapeAttr(st.step) + '\',' + r.row + ')" ' +
@@ -881,13 +1009,7 @@ function renderMultiStepTable(headerName) {
 
   html += '</tbody></table></div>';
 
-  html += '<div class="table-pagination">';
-  html += '<span class="pagination-info">Showing ' + (filtered.length === 0 ? 0 : startIdx + 1) + '-' + Math.min(startIdx + t.pageSize, filtered.length) + ' of ' + filtered.length + '</span>';
-  html += '<div class="pagination-controls">';
-  html += '<button class="page-btn" ' + (t.page <= 1 ? 'disabled' : '') + ' onclick="onPageChange(' + (t.page - 1) + ')">Prev</button>';
-  html += '<span class="page-indicator">Page ' + t.page + ' of ' + totalPages + '</span>';
-  html += '<button class="page-btn" ' + (t.page >= totalPages ? 'disabled' : '') + ' onclick="onPageChange(' + (t.page + 1) + ')">Next</button>';
-  html += '</div></div>';
+  html += tablePaginationHtml(filtered.length, startIdx, totalPages);
 
   var existingWrap = document.querySelector('#tableContainer .table-scroll-wrap');
   var savedScrollLeft = existingWrap ? existingWrap.scrollLeft : 0;
@@ -1125,41 +1247,8 @@ function renderDataTable(headerName, stepName) {
   var plannedColIdx = t.columns.indexOf('Planned');
 
   var html = '';
-
-  // ---- EVERYTHING on ONE single line: breadcrumb title -> status tabs
-  // (Pending/Completed/All/Overdue) -> global search -> column-toggle ->
-  // page-size. The table's own header row follows IMMEDIATELY after this
-  // one toolbar line - no separate rows, no extra gap. ----
-  // Breadcrumb title ("Step / Header") now lives in the TOPBAR itself
-  // (right after "FMS Fashion"), not in this toolbar row - see
-  // updateTopbarBreadcrumb(), called from loadStepTable()/goHome().
-  html += '<div class="status-tabs-row">';
-  html += viewSwitcherHtml();
-  html += '<div class="status-tabs">';
-  // Order requested: All -> Pending -> Overdue -> Completed
-  html += statusTabHtml('all', 'All', allRows.length, t.filterStatus);
-  html += statusTabHtml('pending', 'Pending', pendingCount, t.filterStatus);
-  if (overdueCount > 0) {
-    html += '<button class="status-tab status-tab-overdue' + (t.filterStatus === 'overdue' ? ' active' : '') + '" onclick="onStatusFilter(\'overdue\')">' +
-      '<span class="material-icons-round" style="font-size:13px;">warning</span>Overdue <span class="status-tab-count">' + overdueCount + '</span></button>';
-  }
-  html += statusTabHtml('completed', 'Completed', completedCount, t.filterStatus);
-  html += '</div>';
-  html += '<button type="button" class="reset-filters-btn" onclick="resetAllFilters()" title="Reset all filters back to default">' +
-    '<span class="material-icons-round">restart_alt</span>Reset Filters</button>';
-  html += '<div class="table-search"><span class="material-icons-round">search</span>' +
-    '<input type="text" id="tableGlobalSearch" placeholder="Search all columns..." value="' + escapeAttr(t.globalSearch) + '" oninput="onGlobalSearch(this.value)"></div>';
-  html += '<div class="table-toolbar-right">';
-  html += '<div class="column-toggle-wrap">' +
-    '<button type="button" class="icon-btn" title="Show/Hide Columns" onclick="toggleColumnPanel(event)"><span class="material-icons-round">view_column</span></button>' +
-    renderColumnPanel(t) +
-    '</div>';
-  html += '<div class="page-size-select">Show ' +
-    '<select id="pageSizeSelect" onchange="onPageSizeChange(this.value)">' +
-    [50, 100, 500, 1000].map(function(n) { return '<option value="' + n + '"' + (t.pageSize === n ? ' selected' : '') + '>' + n + '</option>'; }).join('') +
-    '</select> entries</div>';
-  html += '</div>';
-  html += '</div>';
+  html += tablePageHeaderHtml(headerName, stepName, 'Manage pending work, review completed records and fill this step.');
+  html += tableUtilityToolbarHtml(t, allRows.length, pendingCount, overdueCount, completedCount);
 
   // ---- Table (immediately follows the single toolbar line above) ----
   // Every column gets an EXPLICIT pixel width (a sensible default of 150px
@@ -1216,7 +1305,7 @@ function renderDataTable(headerName, stepName) {
       if (r.status === 'pending') {
         // No "Overdue" text/badge - the red row tint (tr.row-overdue) is
         // the only visual indicator, per user request.
-        html += '<button class="btn-fill" onclick="openStepForm(\'' + escapeAttr(headerName) + '\',\'' + escapeAttr(stepName) + '\',' + r.row + ')">Fill</button>';
+        html += '<button class="btn-fill" onclick="openStepForm(\'' + escapeAttr(headerName) + '\',\'' + escapeAttr(stepName) + '\',' + r.row + ')">Fill Step</button>';
       } else {
         html += '<span class="status-badge-done">Done</span>';
       }
@@ -1227,13 +1316,7 @@ function renderDataTable(headerName, stepName) {
   html += '</tbody></table></div>';
 
   // ---- Pagination ----
-  html += '<div class="table-pagination">';
-  html += '<span class="pagination-info">Showing ' + (filtered.length === 0 ? 0 : startIdx + 1) + '-' + Math.min(startIdx + t.pageSize, filtered.length) + ' of ' + filtered.length + '</span>';
-  html += '<div class="pagination-controls">';
-  html += '<button class="page-btn" ' + (t.page <= 1 ? 'disabled' : '') + ' onclick="onPageChange(' + (t.page - 1) + ')">Prev</button>';
-  html += '<span class="page-indicator">Page ' + t.page + ' of ' + totalPages + '</span>';
-  html += '<button class="page-btn" ' + (t.page >= totalPages ? 'disabled' : '') + ' onclick="onPageChange(' + (t.page + 1) + ')">Next</button>';
-  html += '</div></div>';
+  html += tablePaginationHtml(filtered.length, startIdx, totalPages);
 
   // Preserve the table's horizontal scroll position across re-renders
   // (sorting, filtering, searching, resizing, etc. all rebuild this HTML
@@ -2216,12 +2299,15 @@ document.addEventListener('click', function(e) {
     var sidebar = document.getElementById('sidebar');
     var menuBtn = document.querySelector('.icon-btn');
     if (sidebar && !sidebar.contains(e.target) && menuBtn && !menuBtn.contains(e.target)) {
-      closeSidebar();
+      closeSidebarAfterNavigation();
     }
   }
 });
 
 document.addEventListener('keydown', function(e) {
-  if (e.key === 'Escape') closeSidebar();
+  // Escape owns the navigation drawer only on mobile. On desktop it must
+  // not collapse/persist the sidebar while the user is merely dismissing
+  // Appearance, a column filter or the date picker.
+  if (e.key === 'Escape' && isMobileLayout() && FMS.sidebarOpen) closeSidebar(false);
 });
 </script>

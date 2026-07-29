@@ -298,22 +298,43 @@ function getStepCounts(masterSheetUrl, masterSheetName, stepsSheetName, header, 
   }
 
   var lastRow = sheet.getLastRow();
-  var pending = 0, completed = 0;
+  var pending = 0, completed = 0, overdue = 0;
+  var rowCount = Math.max(0, lastRow - WF_DATA_START_ROW + 1);
+  if (!rowCount || (stepIndex > 0 && !prevActualCol)) return { pending: 0, completed: 0, overdue: 0 };
 
-  for (var r = WF_DATA_START_ROW; r <= lastRow; r++) {
-    var isApplicable = false;
-    if (stepIndex === 0) {
-      isApplicable = !!sheet.getRange(r, 1).getValue();
-    } else if (prevActualCol) {
-      isApplicable = !!sheet.getRange(r, prevActualCol).getValue();
+  // Batch each required column once. Spreadsheet service calls dominate
+  // Apps Script runtime; reading cell-by-cell here would multiply calls by
+  // every row and every assigned step on the Home dashboard.
+  var applicabilityValues = sheet.getRange(
+    WF_DATA_START_ROW,
+    stepIndex === 0 ? 1 : prevActualCol,
+    rowCount,
+    1
+  ).getValues();
+  var actualValues = currentPA.actualCol
+    ? sheet.getRange(WF_DATA_START_ROW, currentPA.actualCol, rowCount, 1).getValues()
+    : [];
+  var plannedValues = currentPA.plannedCol
+    ? sheet.getRange(WF_DATA_START_ROW, currentPA.plannedCol, rowCount, 1).getValues()
+    : [];
+  var nowMs = Date.now();
+
+  for (var offset = 0; offset < rowCount; offset++) {
+    if (!applicabilityValues[offset][0]) continue;
+
+    var actualVal = currentPA.actualCol ? actualValues[offset][0] : '';
+    if (actualVal !== '' && actualVal !== null) {
+      completed++;
+    } else {
+      pending++;
+      if (currentPA.plannedCol) {
+        var plannedVal = plannedValues[offset][0];
+        if (plannedVal instanceof Date && plannedVal.getTime() < nowMs) overdue++;
+      }
     }
-    if (!isApplicable) continue;
-
-    var actualVal = currentPA.actualCol ? sheet.getRange(r, currentPA.actualCol).getValue() : '';
-    if (actualVal !== '' && actualVal !== null) completed++; else pending++;
   }
 
-  return { pending: pending, completed: completed };
+  return { pending: pending, completed: completed, overdue: overdue };
 }
 
 /**
@@ -327,7 +348,7 @@ function getHomeSummary(masterSheetUrl, masterSheetName, stepsSheetName, userNam
     if (!permsRes.success) return { success: false, message: permsRes.message, groups: [] };
 
     var groups = [];
-    var totalPending = 0, totalCompleted = 0;
+    var totalPending = 0, totalCompleted = 0, totalOverdue = 0;
 
     for (var header in permsRes.permissions) {
       var steps = permsRes.permissions[header];
@@ -339,16 +360,18 @@ function getHomeSummary(masterSheetUrl, masterSheetName, stepsSheetName, userNam
           step: stepName,
           pending: counts.pending || 0,
           completed: counts.completed || 0,
+          overdue: counts.overdue || 0,
           error: counts.error || null
         });
         totalPending += (counts.pending || 0);
         totalCompleted += (counts.completed || 0);
+        totalOverdue += (counts.overdue || 0);
       });
 
       groups.push({ header: header, steps: stepEntries });
     }
 
-    return { success: true, groups: groups, totalPending: totalPending, totalCompleted: totalCompleted };
+    return { success: true, groups: groups, totalPending: totalPending, totalCompleted: totalCompleted, totalOverdue: totalOverdue };
 
   } catch (e) {
     return { success: false, message: 'Error: ' + e.message, groups: [] };

@@ -135,12 +135,11 @@
    * light/dark mode is active.
    */
   function computeHeaderBg(accentHex) {
-    var resolved = document.documentElement.getAttribute('data-theme') || 'dark';
-    var surface = SURFACE_HEX[resolved] || SURFACE_HEX.dark;
-    // Light mode needs a stronger mix % to be visible against a white
-    // surface; dark mode needs less to avoid looking too saturated.
-    var weight = resolved === 'light' ? 0.14 : 0.22;
-    return mixHex(surface, accentHex, weight);
+    // The redesigned data grid uses a deliberately strong, professional
+    // header band in both display modes. Mixing the selected accent into
+    // a fixed navy foundation keeps the header branded, high-contrast and
+    // fully opaque while still respecting the user's colour preference.
+    return mixHex('#172554', accentHex, 0.32);
   }
 
   function applyDisplayMode(mode, persist) {
@@ -236,6 +235,14 @@
             '<div class="display-mode-tiles" id="fmsDisplayModeTiles"></div>' +
           '</div>' +
           '<div class="appearance-section">' +
+            '<div class="appearance-section-title">Text Size</div>' +
+            '<div class="font-size-tiles" role="group" aria-label="Table text size">' +
+              '<button type="button" class="font-btn" data-font-size="small" onclick="setFontSize(\'small\')"><strong>A</strong><span>Compact</span></button>' +
+              '<button type="button" class="font-btn active" data-font-size="medium" onclick="setFontSize(\'medium\')"><strong>A+</strong><span>Comfortable</span></button>' +
+              '<button type="button" class="font-btn" data-font-size="large" onclick="setFontSize(\'large\')"><strong>A++</strong><span>Large</span></button>' +
+            '</div>' +
+          '</div>' +
+          '<div class="appearance-section">' +
             '<div class="appearance-section-title">Color Scheme</div>' +
             '<div class="color-scheme-grid" id="fmsColorGrid"></div>' +
           '</div>' +
@@ -311,6 +318,7 @@
     buildDrawer();
     renderDisplayModeTiles();
     renderColorGrid();
+    if (typeof setFontSize === 'function' && typeof FMS !== 'undefined') setFontSize(FMS.currentFontSize, false);
     document.getElementById('fmsAppearanceOverlay').classList.add('active');
     document.getElementById('fmsAppearanceDrawer').classList.add('open');
   }
