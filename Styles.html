@@ -1549,15 +1549,58 @@ body.font-large {
 .th-inner { gap: 3px; }
 .col-filter-btn { width: 17px; height: 17px; }
 .col-filter-btn .material-icons-round { font-size: 12px; }
-.col-serial { width: 44px; min-width: 44px; max-width: 44px; }
+.col-serial { width: auto; min-width: 0; max-width: none; }
 .col-serial-sizer { width: 44px; }
-.col-action, .col-action-sizer { width: 104px; min-width: 104px; }
+.col-action { width: auto; min-width: 0; max-width: none; }
+.col-action-sizer { width: 104px; }
 .multi-step-table thead tr.step-group-row th { padding: 4px var(--cell-pad-x); font-size: calc(9.5px * var(--content-font-scale)); }
 .multi-step-table thead tr.step-group-row + tr th { top: 25px; }
 .btn-fill { padding: 4px 10px; font-size: calc(10px * var(--content-font-scale)); }
 .status-badge-done { padding: 3px 8px; }
 .step-chip { padding: 3px 7px; }
 .step-chips { gap: 3px; }
+
+/* Every column can be resized from the Columns panel. System columns are
+   always visible but expose the same exact-width controls as data columns. */
+.column-panel { width: 390px; }
+.column-panel.open { padding: 10px; }
+.column-panel-title { margin-bottom: 3px; padding-bottom: 0; border-bottom: 0; }
+.column-panel-hint { padding-bottom: 7px; margin-bottom: 6px; border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 9.5px; line-height: 1.35; }
+.column-panel-section-title { margin: 8px 2px 4px; color: var(--text-muted); font-size: 8.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; }
+.column-config-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px;
+  min-height: 34px; padding: 4px 3px; border-bottom: 1px solid var(--border);
+}
+.column-config-row:hover { background: var(--color-primary-glow); }
+.column-config-label { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--text-primary); font-size: 10.5px; cursor: pointer; }
+.column-config-label > .material-icons-round:first-child { color: var(--text-muted); font-size: 14px; }
+.column-config-label input { flex: 0 0 auto; margin: 0; accent-color: var(--color-primary); }
+.column-config-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.column-config-system .column-config-label { cursor: default; }
+.column-width-editor { display: flex; align-items: center; gap: 3px; }
+.column-width-step, .column-width-reset {
+  width: 23px; height: 23px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); border-radius: 5px; background: var(--surface-soft); color: var(--text-secondary);
+  font-family: 'Poppins', sans-serif; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.column-width-step:hover, .column-width-reset:hover { border-color: var(--color-primary); color: var(--color-primary); background: var(--color-primary-glow); }
+.column-width-reset .material-icons-round { font-size: 13px; }
+.column-width-input {
+  width: 49px; height: 23px; padding: 0 3px; border: 1px solid var(--border); border-radius: 5px;
+  background: var(--surface-elevated); color: var(--text-primary); outline: none; text-align: right;
+  font-family: 'Poppins', sans-serif; font-size: 9.5px;
+}
+.column-width-input:focus { border-color: var(--color-primary); box-shadow: 0 0 0 2px var(--color-primary-glow); }
+.column-width-unit { color: var(--text-muted); font-size: 8.5px; }
+.column-panel-footer {
+  position: sticky; bottom: -10px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
+  margin: 7px -3px -3px; padding: 7px 3px 3px; background: var(--surface-elevated); border-top: 1px solid var(--border);
+}
+.column-panel-footer .column-panel-reset { margin: 0; padding: 6px; display: flex; align-items: center; justify-content: center; gap: 4px; font-size: 9.5px; }
+.column-panel-footer .material-icons-round { font-size: 13px; }
+.col-resize-handle-left { right: auto; left: 0; }
+.col-resize-handle { touch-action: none; }
+body.column-resizing, body.column-resizing * { cursor: col-resize !important; user-select: none !important; }
 
 /* Compact footer */
 .table-pagination { min-height: 34px; padding: 5px 2px 0; }
@@ -1652,6 +1695,9 @@ body.font-large {
   .view-switcher { width: 100%; }
   .view-switch-btn { flex: 1; }
   .columns-button > span:nth-child(2) { display: none; }
+  .column-config-row { grid-template-columns: 1fr; gap: 3px; padding: 6px 3px; }
+  .column-width-editor { justify-content: flex-end; }
+  .column-width-input { width: 56px; }
   .pagination-info { display: none; }
   .table-pagination { justify-content: flex-end; }
 }

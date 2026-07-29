@@ -97,8 +97,15 @@ function viewSwitcherHtml() {
  * identically in both views.
  */
 function rerenderCurrentTable() {
+  // Width/visibility controls rebuild the table synchronously. Preserve
+  // the Columns panel's own scroll position so editing a lower column
+  // does not jump the user back to the first item after every click.
+  var oldPanel = document.getElementById('columnPanel');
+  var panelScrollTop = oldPanel ? oldPanel.scrollTop : 0;
   if (FMS.viewMode === 'table') renderMultiStepTable(FMS.currentHeader);
   else renderDataTable(FMS.currentHeader, FMS.currentStep);
+  var newPanel = document.getElementById('columnPanel');
+  if (newPanel && panelScrollTop) newPanel.scrollTop = panelScrollTop;
 }
 
 // ===== LIVE CLOCK (top-right, ticks every second) =====
@@ -282,7 +289,9 @@ function silentRefreshCurrentView() {
   // Refresh current single-step table silently, if that's what's on screen
   if (FMS.viewMode !== 'table' && FMS.currentHeader && FMS.currentStep) {
     pending++;
-    var cacheKey = FMS.currentHeader + '|||' + FMS.currentStep;
+    var refreshHeader = FMS.currentHeader;
+    var refreshStep = FMS.currentStep;
+    var cacheKey = refreshHeader + '|||' + refreshStep;
     google.script.run
       .withSuccessHandler(function(res) {
         if (res.success) {
@@ -290,13 +299,28 @@ function silentRefreshCurrentView() {
           var cached = FMS.tableCache[cacheKey];
           var oldStr = cached ? (JSON.stringify(cached.rows) + JSON.stringify(cached.columns)) : null;
           if (newStr !== oldStr) {
-            FMS.tableCache[cacheKey] = { columns: res.columns, columnTypes: res.columnTypes || [], rows: res.rows, fetchedAt: new Date() };
-            FMS.table.columns = res.columns;
-            FMS.table.columnTypes = res.columnTypes || [];
-            FMS.table.rows = res.rows;
-            // Only re-render if this table is still the one on screen
-            if (document.getElementById('tableContainer')) {
-              rerenderCurrentTable();
+            FMS.tableCache[cacheKey] = {
+              columns: res.columns,
+              columnTypes: res.columnTypes || [],
+              defaultHiddenCols: res.defaultHiddenCols || [],
+              rows: res.rows,
+              fetchedAt: new Date()
+            };
+            // The response may arrive after the user has opened another
+            // step. Update the captured step's cache regardless, but never
+            // reconcile its schema against or mutate the currently visible
+            // table unless that exact step is still active.
+            var stillViewingCapturedStep = FMS.viewMode !== 'table' &&
+              FMS.currentHeader === refreshHeader &&
+              FMS.currentStep === refreshStep &&
+              FMS.table.cacheKey === cacheKey;
+            if (stillViewingCapturedStep) {
+              FMS.table.columns = res.columns;
+              FMS.table.columnTypes = res.columnTypes || [];
+              reconcileColumnPrefsForColumns(FMS.table.columns);
+              FMS.table.rows = res.rows;
+              applyDefaultHiddenCols(res.defaultHiddenCols);
+              if (document.getElementById('tableContainer')) rerenderCurrentTable();
             }
             anyChanged = true;
           }
@@ -304,7 +328,7 @@ function silentRefreshCurrentView() {
         done();
       })
       .withFailureHandler(function() { done(); })
-      .wfGetStepTableData(FMS_SESSION.sheetUrl, FMS_SESSION.masterSheet, FMS_SESSION.stepsSheet, FMS.currentHeader, FMS.currentStep);
+      .wfGetStepTableData(FMS_SESSION.sheetUrl, FMS_SESSION.masterSheet, FMS_SESSION.stepsSheet, refreshHeader, refreshStep);
   }
 }
 
@@ -710,15 +734,74 @@ FMS.table = {
   cacheKey: null
 };
 
-// Remembers column width/visibility choices PER STEP (like the data cache),
-// so switching steps and coming back keeps your resize/hide preferences.
-FMS.columnPrefs = {}; // cacheKey -> { colWidths: {}, hiddenCols: {} }
+// Remembers column width/visibility choices PER STEP and across browser
+// sessions. Special width keys "__serial" and "__action" belong to the
+// two system columns that frame every data table.
+var COLUMN_PREFS_STORAGE_KEY = 'fms_column_prefs_v2';
+FMS.columnPrefs = {};
+FMS.columnPrefsLoaded = false;
+
+function ensureColumnPrefsLoaded() {
+  if (FMS.columnPrefsLoaded) return;
+  FMS.columnPrefsLoaded = true;
+  var stored = fmsStoreGet(COLUMN_PREFS_STORAGE_KEY);
+  if (!stored) return;
+  try {
+    var parsed = JSON.parse(stored);
+    if (parsed && typeof parsed === 'object') FMS.columnPrefs = parsed;
+  } catch (e) {
+    FMS.columnPrefs = {};
+  }
+}
+
+function currentColumnPrefsOwner() {
+  if (typeof FMS_SESSION !== 'undefined' && FMS_SESSION && FMS_SESSION.userName) {
+    return String(FMS_SESSION.userName).trim().toLowerCase();
+  }
+  return 'anonymous';
+}
+
+function scopedColumnPrefsKey(cacheKey) {
+  return encodeURIComponent(currentColumnPrefsOwner()) + '|||' + cacheKey;
+}
 
 function getColumnPrefs(cacheKey) {
-  if (!FMS.columnPrefs[cacheKey]) {
-    FMS.columnPrefs[cacheKey] = { colWidths: {}, hiddenCols: {}, hasSavedPrefs: false };
+  ensureColumnPrefsLoaded();
+  var scopedKey = scopedColumnPrefsKey(cacheKey);
+  if (!FMS.columnPrefs[scopedKey]) {
+    FMS.columnPrefs[scopedKey] = { colWidths: {}, hiddenCols: {}, hasSavedPrefs: false, columnSignature: '' };
   }
-  return FMS.columnPrefs[cacheKey];
+  // Backward-compatible defensive shape repair for preferences saved by
+  // earlier versions before width editing existed in the Columns panel.
+  var prefs = FMS.columnPrefs[scopedKey];
+  if (!prefs.colWidths || typeof prefs.colWidths !== 'object') prefs.colWidths = {};
+  if (!prefs.hiddenCols || typeof prefs.hiddenCols !== 'object') prefs.hiddenCols = {};
+  return prefs;
+}
+
+function columnSchemaSignature(columns) {
+  return (columns || []).map(function(name) { return String(name); }).join('\u001f');
+}
+
+function reconcileColumnPrefsForColumns(columns) {
+  if (!FMS.table.cacheKey) return;
+  var prefs = getColumnPrefs(FMS.table.cacheKey);
+  var signature = columnSchemaSignature(columns);
+  if (prefs.columnSignature && prefs.columnSignature !== signature) {
+    // Index-based data-column preferences no longer describe the same
+    // schema. Preserve only the two identity-stable system widths.
+    var systemWidths = {};
+    if (prefs.colWidths.__serial) systemWidths.__serial = prefs.colWidths.__serial;
+    if (prefs.colWidths.__action) systemWidths.__action = prefs.colWidths.__action;
+    prefs.colWidths = systemWidths;
+    prefs.hiddenCols = {};
+    prefs.hasSavedPrefs = false;
+  }
+  prefs.columnSignature = signature;
+  FMS.table.colWidths = prefs.colWidths;
+  FMS.table.hiddenCols = prefs.hiddenCols;
+  FMS.table.hasSavedColPrefs = prefs.hasSavedPrefs;
+  fmsStoreSet(COLUMN_PREFS_STORAGE_KEY, JSON.stringify(FMS.columnPrefs));
 }
 
 /**
@@ -779,6 +862,7 @@ function loadMultiStepTable(headerName) {
 function applyMultiTableData(data) {
   FMS.table.columns = data.columns || [];
   FMS.table.columnTypes = data.columnTypes || [];
+  reconcileColumnPrefsForColumns(FMS.table.columns);
   FMS.table.columnGroups = data.columnGroups || [];
   FMS.table.lockedCols = data.lockedCols || [];
   FMS.table.steps = data.steps || [];
@@ -863,13 +947,35 @@ function tablePageHeaderHtml(headerName, title) {
  * do nothing there. A colgroup defines the widths independently of any row,
  * so both views size columns identically and resizing always works.
  */
+function defaultColumnWidth(key) {
+  if (key === '__serial') return 44;
+  if (key === '__action') return 104;
+  return 132;
+}
+
+function columnWidthBounds(key) {
+  if (key === '__serial') return { min: 40, max: 160 };
+  if (key === '__action') return { min: 72, max: 420 };
+  return { min: 56, max: 600 };
+}
+
+function getConfiguredColumnWidth(t, key) {
+  var bounds = columnWidthBounds(key);
+  var value = parseInt(t.colWidths[key], 10);
+  if (!isFinite(value)) value = defaultColumnWidth(key);
+  return Math.max(bounds.min, Math.min(bounds.max, value));
+}
+
 function tableColgroupHtml(visibleIdx, t, defaultWidth) {
-  var html = '<colgroup><col class="col-serial-sizer">';
+  var serialWidth = getConfiguredColumnWidth(t, '__serial');
+  var actionWidth = getConfiguredColumnWidth(t, '__action');
+  var html = '<colgroup>' +
+    '<col class="col-serial-sizer" data-col="__serial" style="width:' + serialWidth + 'px;">';
   visibleIdx.forEach(function(idx) {
-    var w = t.colWidths[idx] || defaultWidth;
+    var w = getConfiguredColumnWidth(t, idx);
     html += '<col data-col="' + idx + '" style="width:' + w + 'px;">';
   });
-  return html + '<col class="col-action-sizer"></colgroup>';
+  return html + '<col class="col-action-sizer" data-col="__action" style="width:' + actionWidth + 'px;"></colgroup>';
 }
 
 function tableUtilityToolbarHtml(t, allCount, pendingCount, overdueCount, completedCount) {
@@ -891,7 +997,7 @@ function tableUtilityToolbarHtml(t, allCount, pendingCount, overdueCount, comple
       '<span class="material-icons-round">filter_alt_off</span><span>Clear</span></button>';
   }
   html += '<div class="column-toggle-wrap">' +
-    '<button type="button" class="toolbar-btn columns-button' + (t.columnPanelOpen ? ' active' : '') + '" title="Choose visible columns" aria-expanded="' + (t.columnPanelOpen ? 'true' : 'false') + '" onclick="toggleColumnPanel(event)">' +
+    '<button type="button" class="toolbar-btn columns-button' + (t.columnPanelOpen ? ' active' : '') + '" title="Show, hide and resize every column" aria-expanded="' + (t.columnPanelOpen ? 'true' : 'false') + '" onclick="toggleColumnPanel(event)">' +
       '<span class="material-icons-round">view_column</span><span>Columns</span>' +
       (hiddenCount ? '<span class="toolbar-count">' + hiddenCount + '</span>' : '') +
     '</button>' + renderColumnPanel(t) + '</div>';
@@ -980,10 +1086,11 @@ function renderMultiStepTable(headerName) {
 
   // ---- Column name row (identical behaviour to Step View) ----
   html += '<tr>';
-  html += '<th class="col-serial">S.No</th>';
+  html += '<th class="col-serial" data-col="__serial">S.No' +
+    '<span class="col-resize-handle" onmousedown="startColResize(event,\'__serial\')" ontouchstart="startColResize(event,\'__serial\')"></span></th>';
   visibleIdx.forEach(function(idx) {
     var arrow = t.sortCol === idx ? (t.sortDir === 'asc' ? ' ▲' : ' ▼') : '';
-    var w = t.colWidths[idx] || DEFAULT_COL_WIDTH;
+    var w = getConfiguredColumnWidth(t, idx);
     var style = ' style="width:' + w + 'px; min-width:' + w + 'px; max-width:' + w + 'px;"';
     var isGroupStart = groupSpans.some(function(g) { return g.group && g.firstIdx === idx; });
     var isDate = isDateColumn(idx);
@@ -998,10 +1105,11 @@ function renderMultiStepTable(headerName) {
       '<button type="button" class="col-filter-btn' + (activeFilter ? ' active' : '') + '" onclick="' + filterAction + '" title="Filter this column">' +
       '<span class="material-icons-round">' + filterIcon + '</span></button>' +
       '</div>' +
-      '<span class="col-resize-handle" onmousedown="startColResize(event,' + idx + ')"></span>' +
+      '<span class="col-resize-handle" onmousedown="startColResize(event,' + idx + ')" ontouchstart="startColResize(event,' + idx + ')"></span>' +
       '</th>';
   });
-  html += '<th class="col-action">My Steps</th>';
+  html += '<th class="col-action" data-col="__action">My Steps' +
+    '<span class="col-resize-handle col-resize-handle-left" onmousedown="startColResize(event,\'__action\')" ontouchstart="startColResize(event,\'__action\')"></span></th>';
   html += '</tr></thead><tbody>';
 
   if (pageRows.length === 0) {
@@ -1088,6 +1196,7 @@ function loadStepTable(headerName, stepName) {
     main.innerHTML = pageShell;
     FMS.table.columns = cached.columns;
     FMS.table.columnTypes = cached.columnTypes || [];
+    reconcileColumnPrefsForColumns(FMS.table.columns);
     FMS.table.rows = cached.rows;
     applyDefaultHiddenCols(cached.defaultHiddenCols);
     renderDataTable(headerName, stepName);
@@ -1115,6 +1224,7 @@ function fetchStepTableInBackground(headerName, stepName, cacheKey, showErrorsIn
       if (FMS.currentHeader === headerName && FMS.currentStep === stepName) {
         FMS.table.columns = res.columns;
         FMS.table.columnTypes = res.columnTypes || [];
+        reconcileColumnPrefsForColumns(FMS.table.columns);
         FMS.table.rows = res.rows;
         applyDefaultHiddenCols(res.defaultHiddenCols);
         if (document.getElementById('tableContainer')) {
@@ -1297,10 +1407,11 @@ function renderDataTable(headerName, stepName) {
   html += tableColgroupHtml(visibleIdx, t, DEFAULT_COL_WIDTH);
   html += '<thead>';
   html += '<tr>';
-  html += '<th class="col-serial">S.No</th>';
+  html += '<th class="col-serial" data-col="__serial">S.No' +
+    '<span class="col-resize-handle" onmousedown="startColResize(event,\'__serial\')" ontouchstart="startColResize(event,\'__serial\')"></span></th>';
   visibleIdx.forEach(function(idx) {
     var arrow = t.sortCol === idx ? (t.sortDir === 'asc' ? ' ▲' : ' ▼') : '';
-    var w = t.colWidths[idx] || DEFAULT_COL_WIDTH;
+    var w = getConfiguredColumnWidth(t, idx);
     var style = ' style="width:' + w + 'px; min-width:' + w + 'px; max-width:' + w + 'px;"';
     var dividerClass = (idx === plannedColIdx) ? ' col-before-planned' : '';
     var isDate = isDateColumn(idx);
@@ -1315,10 +1426,11 @@ function renderDataTable(headerName, stepName) {
       '<button type="button" class="col-filter-btn' + (activeFilter ? ' active' : '') + '" onclick="' + filterAction + '" title="Filter this column">' +
       '<span class="material-icons-round">' + filterIcon + '</span></button>' +
       '</div>' +
-      '<span class="col-resize-handle" onmousedown="startColResize(event,' + idx + ')"></span>' +
+      '<span class="col-resize-handle" onmousedown="startColResize(event,' + idx + ')" ontouchstart="startColResize(event,' + idx + ')"></span>' +
       '</th>';
   });
-  html += '<th class="col-action">Action</th>';
+  html += '<th class="col-action" data-col="__action">Action' +
+    '<span class="col-resize-handle col-resize-handle-left" onmousedown="startColResize(event,\'__action\')" ontouchstart="startColResize(event,\'__action\')"></span></th>';
   html += '</tr></thead><tbody>';
 
   if (pageRows.length === 0) {
@@ -1362,28 +1474,66 @@ function renderDataTable(headerName, stepName) {
   if (newWrap && savedScrollLeft) newWrap.scrollLeft = savedScrollLeft;
 }
 
-// ===== COLUMN SHOW/HIDE PANEL =====
+// ===== COLUMN VISIBILITY + WIDTH PANEL =====
+function columnWidthKeyArg(key) {
+  return typeof key === 'number' ? String(key) : '\'' + key + '\'';
+}
+
+function columnWidthEditorHtml(key, t) {
+  var value = getConfiguredColumnWidth(t, key);
+  var bounds = columnWidthBounds(key);
+  var arg = columnWidthKeyArg(key);
+  return '<div class="column-width-editor" role="group" aria-label="Column width">' +
+    '<button type="button" class="column-width-step" onclick="adjustColumnWidth(' + arg + ',-16)" title="Narrower" aria-label="Make column narrower">−</button>' +
+    '<input class="column-width-input" type="number" min="' + bounds.min + '" max="' + bounds.max + '" step="4" value="' + value + '" ' +
+      'onchange="setColumnWidth(' + arg + ',this.value)" aria-label="Width in pixels">' +
+    '<span class="column-width-unit">px</span>' +
+    '<button type="button" class="column-width-step" onclick="adjustColumnWidth(' + arg + ',16)" title="Wider" aria-label="Make column wider">+</button>' +
+    '<button type="button" class="column-width-reset" onclick="resetColumnWidth(' + arg + ')" title="Reset this width" aria-label="Reset this column width">' +
+      '<span class="material-icons-round">restart_alt</span></button>' +
+    '</div>';
+}
+
+function systemColumnConfigHtml(key, label, icon, t) {
+  return '<div class="column-config-row column-config-system">' +
+    '<div class="column-config-label"><span class="material-icons-round">' + icon + '</span>' +
+      '<span class="column-config-name">' + escapeHtml(label) + '</span>' +
+      '<span class="material-icons-round column-lock-icon" title="Always visible">lock</span></div>' +
+    columnWidthEditorHtml(key, t) +
+    '</div>';
+}
+
 function renderColumnPanel(t) {
   if (!t.columnPanelOpen) return '<div class="column-panel" id="columnPanel"></div>';
+  var actionLabel = FMS.viewMode === 'table' ? 'My Steps' : 'Action';
   var html = '<div class="column-panel open" id="columnPanel" onclick="event.stopPropagation()">';
-  html += '<div class="column-panel-title">Show / Hide Columns</div>';
+  html += '<div class="column-panel-title">Columns &amp; Widths</div>' +
+    '<div class="column-panel-hint">Drag any header edge, or set an exact width below.</div>';
+
+  html += '<div class="column-panel-section-title">System columns</div>';
+  html += systemColumnConfigHtml('__serial', 'S.No', 'format_list_numbered', t);
+  html += systemColumnConfigHtml('__action', actionLabel, 'bolt', t);
+
+  html += '<div class="column-panel-section-title">Data columns</div>';
   var locked = t.lockedCols || [];
   t.columns.forEach(function(col, idx) {
-    // Plan-date columns are permanently visible - they're the backbone of
-    // the Table View (seeing what's due across the whole pipeline), so
-    // their checkbox is shown ticked but disabled, with a padlock.
     var isLocked = locked.indexOf(idx) !== -1;
     var checked = (!t.hiddenCols[idx] || isLocked) ? ' checked' : '';
-    html += '<label class="column-panel-item' + (isLocked ? ' item-locked' : '') + '"' +
-      (isLocked ? ' title="Plan dates are always visible and cannot be hidden"' : '') + '>' +
-      '<input type="checkbox"' + checked + (isLocked ? ' disabled' : '') +
-      ' onchange="toggleColumnVisibility(' + idx + ', this.checked)">' +
-      '<span>' + escapeHtml(col) + '</span>' +
-      (isLocked ? '<span class="material-icons-round column-lock-icon">lock</span>' : '') +
-      '</label>';
+    html += '<div class="column-config-row' + (isLocked ? ' item-locked' : '') + '">' +
+      '<label class="column-config-label"' + (isLocked ? ' title="Plan dates are always visible"' : '') + '>' +
+        '<input type="checkbox"' + checked + (isLocked ? ' disabled' : '') +
+          ' onchange="toggleColumnVisibility(' + idx + ',this.checked)">' +
+        '<span class="column-config-name">' + escapeHtml(col) + '</span>' +
+        (isLocked ? '<span class="material-icons-round column-lock-icon">lock</span>' : '') +
+      '</label>' +
+      columnWidthEditorHtml(idx, t) +
+      '</div>';
   });
-  html += '<button type="button" class="column-panel-reset" onclick="resetAllColumns()">Show All</button>';
-  html += '</div>';
+
+  html += '<div class="column-panel-footer">' +
+    '<button type="button" class="column-panel-reset" onclick="resetAllColumns()"><span class="material-icons-round">visibility</span>Show All</button>' +
+    '<button type="button" class="column-panel-reset" onclick="resetAllColumnWidths()"><span class="material-icons-round">width_normal</span>Reset Widths</button>' +
+    '</div></div>';
   return html;
 }
 
@@ -1420,6 +1570,39 @@ function toggleColumnVisibility(idx, isVisible) {
 function resetAllColumns() {
   FMS.table.hiddenCols = {};
   FMS.table.hasSavedColPrefs = true;
+  FMS.table.columnPanelOpen = true;
+  persistColumnPrefs();
+  rerenderCurrentTable();
+}
+
+function setColumnWidth(key, rawValue) {
+  var bounds = columnWidthBounds(key);
+  var value = parseInt(rawValue, 10);
+  if (!isFinite(value)) value = defaultColumnWidth(key);
+  value = Math.max(bounds.min, Math.min(bounds.max, value));
+  FMS.table.colWidths[key] = value;
+  FMS.table.hasSavedColPrefs = true;
+  FMS.table.columnPanelOpen = true;
+  persistColumnPrefs();
+  rerenderCurrentTable();
+}
+
+function adjustColumnWidth(key, delta) {
+  setColumnWidth(key, getConfiguredColumnWidth(FMS.table, key) + delta);
+}
+
+function resetColumnWidth(key) {
+  delete FMS.table.colWidths[key];
+  FMS.table.hasSavedColPrefs = true;
+  FMS.table.columnPanelOpen = true;
+  persistColumnPrefs();
+  rerenderCurrentTable();
+}
+
+function resetAllColumnWidths() {
+  FMS.table.colWidths = {};
+  FMS.table.hasSavedColPrefs = true;
+  FMS.table.columnPanelOpen = true;
   persistColumnPrefs();
   rerenderCurrentTable();
 }
@@ -1430,6 +1613,7 @@ function persistColumnPrefs() {
   prefs.colWidths = FMS.table.colWidths;
   prefs.hiddenCols = FMS.table.hiddenCols;
   prefs.hasSavedPrefs = FMS.table.hasSavedColPrefs;
+  fmsStoreSet(COLUMN_PREFS_STORAGE_KEY, JSON.stringify(FMS.columnPrefs));
 }
 
 // Close the column panel when clicking anywhere outside it
@@ -1449,22 +1633,41 @@ document.addEventListener('click', function(e) {
 // ===== COLUMN RESIZE (drag the handle on the right edge of a <th>) =====
 var colResizeState = null;
 
+function resizeClientX(e) {
+  if (e.touches && e.touches.length) return e.touches[0].clientX;
+  if (e.changedTouches && e.changedTouches.length) return e.changedTouches[0].clientX;
+  return e.clientX;
+}
+
 function startColResize(e, idx) {
-  e.preventDefault();
+  if (e.cancelable) e.preventDefault();
   e.stopPropagation();
   var th = e.target.closest('th');
   // The <colgroup> entry is what actually controls width under
   // table-layout:fixed, so drag updates that element (not just the <th>).
   var col = document.querySelector('#fmsDataTable colgroup col[data-col="' + idx + '"]');
-  colResizeState = { idx: idx, startX: e.clientX, startWidth: th.offsetWidth, th: th, col: col };
+  colResizeState = {
+    idx: idx,
+    startX: resizeClientX(e),
+    startWidth: th.offsetWidth,
+    th: th,
+    col: col,
+    direction: idx === '__action' ? -1 : 1
+  };
+  document.body.classList.add('column-resizing');
   document.addEventListener('mousemove', onColResizeMove);
   document.addEventListener('mouseup', onColResizeEnd);
+  document.addEventListener('touchmove', onColResizeMove, { passive: false });
+  document.addEventListener('touchend', onColResizeEnd);
+  document.addEventListener('touchcancel', onColResizeEnd);
 }
 
 function onColResizeMove(e) {
   if (!colResizeState) return;
-  var delta = e.clientX - colResizeState.startX;
-  var newWidth = Math.max(56, colResizeState.startWidth + delta);
+  if (e.cancelable) e.preventDefault();
+  var bounds = columnWidthBounds(colResizeState.idx);
+  var delta = (resizeClientX(e) - colResizeState.startX) * colResizeState.direction;
+  var newWidth = Math.max(bounds.min, Math.min(bounds.max, colResizeState.startWidth + delta));
   if (colResizeState.col) colResizeState.col.style.width = newWidth + 'px';
   colResizeState.th.style.width = newWidth + 'px';
   colResizeState.th.style.minWidth = newWidth + 'px';
@@ -1476,10 +1679,15 @@ function onColResizeEnd() {
   if (!colResizeState) return;
   if (colResizeState.liveWidth) {
     FMS.table.colWidths[colResizeState.idx] = colResizeState.liveWidth;
+    FMS.table.hasSavedColPrefs = true;
     persistColumnPrefs();
   }
+  document.body.classList.remove('column-resizing');
   document.removeEventListener('mousemove', onColResizeMove);
   document.removeEventListener('mouseup', onColResizeEnd);
+  document.removeEventListener('touchmove', onColResizeMove);
+  document.removeEventListener('touchend', onColResizeEnd);
+  document.removeEventListener('touchcancel', onColResizeEnd);
   colResizeState = null;
 }
 
