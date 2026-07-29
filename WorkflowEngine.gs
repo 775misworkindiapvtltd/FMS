@@ -813,6 +813,204 @@ function getOrCreateFMSFolder() {
 }
 
 // ============================================
+// MULTI-STEP "TABLE VIEW" (all of MY steps side by side, one row per item)
+// ============================================
+//
+// The Step View (getStepTableData) shows ONE step at a time - you pick a
+// step in the sidebar and work only on that step's columns.
+//
+// This Table View instead shows the WHOLE pipeline for a header in a
+// single wide table: the base identifying columns, then - laid out left
+// to right in real pipeline order - the columns of every step THIS user
+// is permitted to action (from STEPS sheet Col C). Steps the user has no
+// permission for are omitted entirely, so if a doer owns steps 3, 6 and
+// 8, they see exactly those three step blocks and nothing else.
+//
+// Per row, each of the user's steps carries its own state:
+//   'completed' - that step's Actual is filled
+//   'pending'   - actionable NOW (previous step done, Actual still empty)
+//   'locked'    - not reachable yet (an earlier step isn't done)
+// and an 'overdue' flag when a pending step's Planned date has passed.
+//
+// The row-level status (used by the All/Pending/Overdue/Completed tabs)
+// is derived from ONLY the user's own steps:
+//   pending   - at least one of my steps is actionable now
+//   completed - all of my steps on this row are done
+//   locked    - none actionable yet (only visible under the "All" tab)
+//
+function getMultiStepTableData(masterSheetUrl, masterSheetName, stepsSheetName, header, userName) {
+  try {
+    var target = getTargetSheetInfo(masterSheetUrl, masterSheetName, header);
+    if (!target) return { success: false, message: 'Target sheet info not found in MASTER for header: ' + header };
+
+    var targetSs = SpreadsheetApp.openByUrl(target.sheetUrl);
+    var sheet = targetSs.getSheetByName(target.sheetName);
+    if (!sheet) return { success: false, message: 'Target sheet "' + target.sheetName + '" not found' };
+
+    var masterSs = SpreadsheetApp.openByUrl(masterSheetUrl);
+    var allSteps = getAllStepsForHeader(masterSs, stepsSheetName, header);
+    if (!allSteps.length) return { success: false, message: 'No steps found in STEPS sheet for header: ' + header };
+
+    // Which of those steps may THIS user action? (same permission source
+    // as the sidebar - STEPS sheet Col C)
+    var perms = getUserPermissionsInternal(masterSheetUrl, stepsSheetName, userName);
+    var myStepNames = [];
+    if (perms.success) {
+      if (perms.permissions[header]) {
+        myStepNames = perms.permissions[header];
+      } else {
+        for (var hk in perms.permissions) {
+          if (String(hk).trim().toUpperCase() === String(header).trim().toUpperCase()) {
+            myStepNames = perms.permissions[hk];
+            break;
+          }
+        }
+      }
+    }
+    var myStepsUpper = myStepNames.map(function (s) { return String(s).trim().toUpperCase(); });
+
+    // ---- Base (identifying) columns: everything before the FIRST step ----
+    var firstStepRange = findStepColumnRange(sheet, allSteps[0]);
+    var baseColCount = firstStepRange ? Math.max(0, firstStepRange.startCol - 1) : 0;
+    var baseNameVals = baseColCount ? sheet.getRange(WF_FIELD_NAME_ROW, 1, 1, baseColCount).getValues()[0] : [];
+    var baseTypeVals = baseColCount ? sheet.getRange(WF_TYPE_ROW, 1, 1, baseColCount).getValues()[0] : [];
+
+    var columns = [];          // flat list of column labels
+    var columnTypes = [];      // parallel: 'DATE' etc (drives the calendar filter)
+    var columnGroups = [];     // parallel: '' for base cols, else the step name
+    var defaultHiddenCols = []; // audit-trail cols start hidden
+    var lockedCols = [];       // Plan-date cols can NEVER be hidden (per requirement)
+
+    for (var bc = 0; bc < baseColCount; bc++) {
+      var bName = String(baseNameVals[bc]).trim() || ('Col ' + (bc + 1));
+      var bType = String(baseTypeVals[bc]).trim().toUpperCase();
+      var bLower = bName.toLowerCase();
+      var bIsDate = bType.indexOf('DATE') !== -1 || bLower.indexOf('date') !== -1 || bLower.indexOf('timestamp') !== -1;
+      columns.push(bName);
+      columnTypes.push(bIsDate ? 'DATE' : bType);
+      columnGroups.push('');
+      if (isAuditTrailField(bName)) defaultHiddenCols.push(columns.length - 1);
+    }
+
+    // ---- One block of columns per step (only for the user's own steps) ----
+    var stepMeta = [];
+    for (var i = 0; i < allSteps.length; i++) {
+      var stepName = allSteps[i];
+      var range = findStepColumnRange(sheet, stepName);
+      if (!range) continue;
+
+      var fields = getStepFields(sheet, range);
+      var pa = getPlannedActualCols(fields);
+      var visibleFields = fields.filter(isFieldConfigured);
+      var allowed = myStepsUpper.indexOf(String(stepName).trim().toUpperCase()) !== -1;
+
+      var colIdxStart = -1, colIdxEnd = -1;
+      if (allowed) {
+        colIdxStart = columns.length;
+        for (var f = 0; f < visibleFields.length; f++) {
+          var fld = visibleFields[f];
+          var fName = fld.name || ('Col ' + fld.col);
+          var fLower = fName.toLowerCase();
+          var fIsDate = fld.type.toUpperCase().indexOf('DATE') !== -1 ||
+            fLower.indexOf('planned') !== -1 || fLower.indexOf('actual') !== -1 ||
+            fLower.indexOf('modified at') !== -1;
+          columns.push(fName);
+          columnTypes.push(fIsDate ? 'DATE' : fld.type.toUpperCase());
+          columnGroups.push(stepName);
+          var newIdx = columns.length - 1;
+          if (isAuditTrailField(fName)) defaultHiddenCols.push(newIdx);
+          // Plan dates must always stay visible - they're the whole point
+          // of the wide view (seeing what's due across the pipeline).
+          if (fLower.indexOf('planned') !== -1) lockedCols.push(newIdx);
+        }
+        colIdxEnd = columns.length - 1;
+      }
+
+      stepMeta.push({
+        step: stepName,
+        order: i + 1,
+        allowed: allowed,
+        plannedCol: pa.plannedCol,
+        actualCol: pa.actualCol,
+        fields: visibleFields,
+        colIdxStart: colIdxStart,
+        colIdxEnd: colIdxEnd,
+        prevActualCol: null
+      });
+    }
+
+    // Each step's gate is the PREVIOUS pipeline step's Actual column
+    // (regardless of whether the user owns that previous step).
+    for (var s = 0; s < stepMeta.length; s++) {
+      stepMeta[s].prevActualCol = s > 0 ? stepMeta[s - 1].actualCol : null;
+    }
+
+    var lastRow = sheet.getLastRow();
+    var lastCol = sheet.getLastColumn();
+    var rows = [];
+    var nowMs = Date.now();
+
+    for (var r = WF_DATA_START_ROW; r <= lastRow; r++) {
+      var rowValues = sheet.getRange(r, 1, 1, lastCol).getValues()[0];
+      if (!rowValues[0]) continue; // no base data -> not a real work item
+
+      var cells = [];
+      for (var b2 = 0; b2 < baseColCount; b2++) cells.push(formatDateSafe(rowValues[b2]));
+
+      var stepStates = [];
+      var anyPending = false, anyOverdue = false, myTotal = 0, myDone = 0;
+
+      for (var m = 0; m < stepMeta.length; m++) {
+        var sm = stepMeta[m];
+        var actualVal = sm.actualCol ? rowValues[sm.actualCol - 1] : '';
+        var isDone = (actualVal !== '' && actualVal !== null && actualVal !== undefined);
+        var prevDone = sm.prevActualCol ? !!rowValues[sm.prevActualCol - 1] : true;
+        var state = isDone ? 'completed' : (prevDone ? 'pending' : 'locked');
+
+        var isOverdue = false;
+        if (state === 'pending' && sm.plannedCol) {
+          var plannedVal = rowValues[sm.plannedCol - 1];
+          if (plannedVal instanceof Date && plannedVal.getTime() < nowMs) isOverdue = true;
+        }
+
+        if (sm.allowed) {
+          for (var vf = 0; vf < sm.fields.length; vf++) {
+            cells.push(formatDateSafe(rowValues[sm.fields[vf].col - 1]));
+          }
+          myTotal++;
+          if (state === 'completed') myDone++;
+          if (state === 'pending') anyPending = true;
+          if (isOverdue) anyOverdue = true;
+
+          stepStates.push({ step: sm.step, order: sm.order, status: state, overdue: isOverdue });
+        }
+      }
+
+      var rowStatus = anyPending ? 'pending' : ((myTotal > 0 && myDone === myTotal) ? 'completed' : 'locked');
+      rows.push({ row: r, status: rowStatus, overdue: anyOverdue, cells: cells, steps: stepStates });
+    }
+
+    return {
+      success: true,
+      columns: columns,
+      columnTypes: columnTypes,
+      columnGroups: columnGroups,
+      defaultHiddenCols: defaultHiddenCols,
+      lockedCols: lockedCols,
+      baseColCount: baseColCount,
+      steps: stepMeta.filter(function (s) { return s.allowed; }).map(function (s) {
+        return { step: s.step, order: s.order, colIdxStart: s.colIdxStart, colIdxEnd: s.colIdxEnd };
+      }),
+      totalPipelineSteps: allSteps.length,
+      rows: rows
+    };
+
+  } catch (e) {
+    return { success: false, message: 'Error: ' + e.message };
+  }
+}
+
+// ============================================
 // CLIENT-FACING WRAPPERS (called from Dashboard via google.script.run)
 // ============================================
 
@@ -834,4 +1032,8 @@ function wfGetStepTableData(sheetUrl, masterSheet, stepsSheet, header, stepName)
 
 function wfGetHomeSummary(sheetUrl, masterSheet, stepsSheet, userName) {
   return getHomeSummary(sheetUrl, masterSheet, stepsSheet, userName);
+}
+
+function wfGetMultiStepTableData(sheetUrl, masterSheet, stepsSheet, header, userName) {
+  return getMultiStepTableData(sheetUrl, masterSheet, stepsSheet, header, userName);
 }

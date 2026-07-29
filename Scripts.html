@@ -8,13 +8,97 @@ var FMS = {
   currentTheme: 'dark',
   currentFontSize: 'medium',
   tableCache: {},        // "header|||step" -> { columns, rows, fetchedAt }
+  multiTableCache: {},   // header -> { columns, columnGroups, steps, rows, fetchedAt }
   permissionsCache: null,
   lastSyncTime: null,
   autoRefreshTimer: null,
   clockTimer: null,
   syncInFlight: false,
-  AUTO_REFRESH_MS: 5 * 60 * 1000 // 5 minutes
+  AUTO_REFRESH_MS: 5 * 60 * 1000, // 5 minutes
+
+  // 'step'  = Step View  - one step at a time (pick it in the sidebar)
+  // 'table' = Table View - the whole pipeline side by side, showing only
+  //           the steps this user is permitted to action.
+  // Remembered across sessions in localStorage (see VIEW_STORAGE_KEY).
+  viewMode: 'step'
 };
+
+var VIEW_STORAGE_KEY = 'fms_view_mode';
+
+// Defensive localStorage access (private browsing / storage disabled)
+function fmsStoreGet(key) { try { return window.localStorage.getItem(key); } catch (e) { return null; } }
+function fmsStoreSet(key, val) { try { window.localStorage.setItem(key, val); } catch (e) { /* ignore */ } }
+
+function getStoredViewMode() {
+  var v = fmsStoreGet(VIEW_STORAGE_KEY);
+  return (v === 'table' || v === 'step') ? v : 'step';
+}
+
+/**
+ * Switches between Step View and Table View, remembers the choice for
+ * next time, and immediately re-renders whatever the user is looking at.
+ * Called by the segmented view-switcher in the table toolbar.
+ */
+function setViewMode(mode) {
+  if (mode !== 'step' && mode !== 'table') return;
+  if (FMS.viewMode === mode) return;
+  FMS.viewMode = mode;
+  fmsStoreSet(VIEW_STORAGE_KEY, mode);
+
+  // Nothing open yet (e.g. on Home) - the new mode just applies next time
+  // a step/header is opened from the sidebar.
+  if (!FMS.currentHeader) return;
+
+  if (mode === 'table') {
+    loadMultiStepTable(FMS.currentHeader);
+  } else {
+    // Coming back to Step View: reopen the step the user last worked on
+    // for this header, falling back to their first permitted step there.
+    var step = FMS.currentStep || firstPermittedStepFor(FMS.currentHeader);
+    if (!step) return;
+    FMS.currentStep = step;
+    updateTopbarBreadcrumb(step, FMS.currentHeader);
+    loadStepTable(FMS.currentHeader, step);
+  }
+}
+
+function firstPermittedStepFor(headerName) {
+  var perms = FMS.permissionsCache || {};
+  var steps = perms[headerName];
+  if (steps && steps.length) return steps[0];
+  for (var h in perms) {
+    if (String(h).trim().toUpperCase() === String(headerName).trim().toUpperCase()) {
+      return (perms[h] && perms[h].length) ? perms[h][0] : null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Segmented Step View / Table View switcher, rendered at the start of the
+ * table toolbar line in BOTH views so it's always reachable.
+ */
+function viewSwitcherHtml() {
+  return '<div class="view-switcher" role="group" aria-label="View mode">' +
+    '<button type="button" class="view-switch-btn' + (FMS.viewMode === 'step' ? ' active' : '') + '" ' +
+      'onclick="setViewMode(\'step\')" title="Step View - work on one step at a time">' +
+      '<span class="material-icons-round">view_agenda</span>Step</button>' +
+    '<button type="button" class="view-switch-btn' + (FMS.viewMode === 'table' ? ' active' : '') + '" ' +
+      'onclick="setViewMode(\'table\')" title="Table View - all my steps side by side">' +
+      '<span class="material-icons-round">table_chart</span>Table</button>' +
+    '</div>';
+}
+
+/**
+ * Re-renders whichever data view is currently on screen. Every toolbar
+ * control (sorting, filtering, paging, column show/hide, resizing) calls
+ * this instead of renderDataTable() directly, so all of them work
+ * identically in both views.
+ */
+function rerenderCurrentTable() {
+  if (FMS.viewMode === 'table') renderMultiStepTable(FMS.currentHeader);
+  else renderDataTable(FMS.currentHeader, FMS.currentStep);
+}
 
 // ===== LIVE CLOCK (top-right, ticks every second) =====
 function startLiveClock() {
@@ -169,8 +253,33 @@ function silentRefreshCurrentView() {
       .wfGetHomeSummary(FMS_SESSION.sheetUrl, FMS_SESSION.masterSheet, FMS_SESSION.stepsSheet, FMS_SESSION.userName);
   }
 
-  // Refresh current table silently, if user currently has one open
-  if (FMS.currentHeader && FMS.currentStep) {
+  // Refresh the wide Table View silently, if that's what's on screen
+  if (FMS.viewMode === 'table' && FMS.currentHeader) {
+    pending++;
+    var multiHeader = FMS.currentHeader;
+    google.script.run
+      .withSuccessHandler(function(res) {
+        if (res.success) {
+          var newStr = JSON.stringify(res.rows) + JSON.stringify(res.columns);
+          var cachedMulti = FMS.multiTableCache[multiHeader];
+          var oldStr = cachedMulti ? (JSON.stringify(cachedMulti.rows) + JSON.stringify(cachedMulti.columns)) : null;
+          if (newStr !== oldStr) {
+            FMS.multiTableCache[multiHeader] = res;
+            if (FMS.viewMode === 'table' && FMS.currentHeader === multiHeader) {
+              applyMultiTableData(res);
+              if (document.getElementById('tableContainer')) renderMultiStepTable(multiHeader);
+            }
+            anyChanged = true;
+          }
+        }
+        done();
+      })
+      .withFailureHandler(function() { done(); })
+      .wfGetMultiStepTableData(FMS_SESSION.sheetUrl, FMS_SESSION.masterSheet, FMS_SESSION.stepsSheet, multiHeader, FMS_SESSION.userName);
+  }
+
+  // Refresh current single-step table silently, if that's what's on screen
+  if (FMS.viewMode !== 'table' && FMS.currentHeader && FMS.currentStep) {
     pending++;
     var cacheKey = FMS.currentHeader + '|||' + FMS.currentStep;
     google.script.run
@@ -186,7 +295,7 @@ function silentRefreshCurrentView() {
             FMS.table.rows = res.rows;
             // Only re-render if this table is still the one on screen
             if (document.getElementById('tableContainer')) {
-              renderDataTable(FMS.currentHeader, FMS.currentStep);
+              rerenderCurrentTable();
             }
             anyChanged = true;
           }
@@ -298,8 +407,18 @@ function openPage(pageName, headerName) {
 
   FMS.currentHeader = headerName;
   FMS.currentStep = pageName;
-  updateTopbarBreadcrumb(pageName, headerName);
-  loadStepTable(headerName, pageName);
+
+  // Table View is per-HEADER (the whole pipeline at once), so clicking any
+  // step of a header opens that header's wide table instead of the single
+  // step - while still remembering which step was clicked, so switching
+  // back to Step View returns the user exactly where they expected.
+  if (FMS.viewMode === 'table') {
+    updateTopbarBreadcrumb('All My Steps', headerName);
+    loadMultiStepTable(headerName);
+  } else {
+    updateTopbarBreadcrumb(pageName, headerName);
+    loadStepTable(headerName, pageName);
+  }
 }
 
 /**
@@ -526,6 +645,257 @@ function applyDefaultHiddenCols(defaultHiddenCols) {
   });
 }
 
+// ================================================================
+// TABLE VIEW - the whole pipeline for one header, side by side,
+// showing ONLY the steps this user is permitted to action.
+// ================================================================
+
+/**
+ * Loads the multi-step (Table View) data for a header. Same instant
+ * cache-then-silently-refresh pattern as loadStepTable(), so switching
+ * back to a header you've already opened never shows a loading spinner.
+ */
+function loadMultiStepTable(headerName) {
+  var main = document.getElementById('mainContent');
+  var cacheKey = headerName + '|||__ALL_STEPS__';
+  var cached = FMS.multiTableCache[headerName];
+
+  FMS.table.filterStatus = 'pending';
+  FMS.table.globalSearch = '';
+  FMS.table.colSearch = {};
+  FMS.table.sortCol = null;
+  FMS.table.page = 1;
+  FMS.table.cacheKey = cacheKey;
+  FMS.table.columnPanelOpen = false;
+  var prefs = getColumnPrefs(cacheKey);
+  FMS.table.colWidths = prefs.colWidths;
+  FMS.table.hiddenCols = prefs.hiddenCols;
+  FMS.table.hasSavedColPrefs = prefs.hasSavedPrefs;
+
+  var pageShell = '<div class="table-page"><div id="tableContainer"></div></div>';
+
+  if (cached) {
+    main.innerHTML = pageShell;
+    applyMultiTableData(cached);
+    renderMultiStepTable(headerName);
+    fetchMultiStepTableInBackground(headerName, false);
+  } else {
+    main.innerHTML = pageShell;
+    document.getElementById('tableContainer').innerHTML = '<div class="pending-loading">Loading your steps...</div>';
+    fetchMultiStepTableInBackground(headerName, true);
+  }
+}
+
+function applyMultiTableData(data) {
+  FMS.table.columns = data.columns || [];
+  FMS.table.columnTypes = data.columnTypes || [];
+  FMS.table.columnGroups = data.columnGroups || [];
+  FMS.table.lockedCols = data.lockedCols || [];
+  FMS.table.steps = data.steps || [];
+  FMS.table.baseColCount = data.baseColCount || 0;
+  FMS.table.totalPipelineSteps = data.totalPipelineSteps || 0;
+  FMS.table.rows = data.rows || [];
+  applyDefaultHiddenCols(data.defaultHiddenCols);
+}
+
+function fetchMultiStepTableInBackground(headerName, showErrorsInline) {
+  google.script.run
+    .withSuccessHandler(function(res) {
+      if (!res.success) {
+        if (showErrorsInline) {
+          document.getElementById('tableContainer').innerHTML =
+            '<div class="pending-empty"><span class="material-icons-round">error_outline</span>' +
+            escapeHtml(res.message || 'Could not load Table View') + '</div>';
+        }
+        return;
+      }
+      FMS.multiTableCache[headerName] = res;
+      // Only touch the DOM if the user is still on this header in Table View
+      if (FMS.viewMode === 'table' && FMS.currentHeader === headerName) {
+        applyMultiTableData(res);
+        if (document.getElementById('tableContainer')) renderMultiStepTable(headerName);
+      }
+      setLastUpdatedNow(false);
+    })
+    .withFailureHandler(function(err) {
+      if (showErrorsInline) {
+        document.getElementById('tableContainer').innerHTML =
+          '<div class="pending-empty">' + escapeHtml(err.message) + '</div>';
+      }
+    })
+    .wfGetMultiStepTableData(FMS_SESSION.sheetUrl, FMS_SESSION.masterSheet, FMS_SESSION.stepsSheet, headerName, FMS_SESSION.userName);
+}
+
+/**
+ * Renders the wide Table View: a grouped header (one banner per step,
+ * spanning that step's own columns) above the normal column-name row,
+ * and a per-row Action cell carrying one compact chip per step the user
+ * owns - clickable when that step is actionable, a green tick when it's
+ * already done, and a padlock while an earlier step still blocks it.
+ *
+ * Deliberately reuses the exact same filtering/sorting/paging/column
+ * machinery as the Step View (getFilteredSortedRows, colSearch, colWidths,
+ * hiddenCols, pagination) so both views behave identically.
+ */
+function renderMultiStepTable(headerName) {
+  var t = FMS.table;
+  var allRows = t.rows || [];
+  var pendingCount = allRows.filter(function(r){ return r.status === 'pending'; }).length;
+  var completedCount = allRows.filter(function(r){ return r.status === 'completed'; }).length;
+  var overdueCount = allRows.filter(function(r){ return r.overdue; }).length;
+
+  var filtered = getFilteredSortedRows();
+  var totalPages = Math.max(1, Math.ceil(filtered.length / t.pageSize));
+  if (t.page > totalPages) t.page = totalPages;
+  var startIdx = (t.page - 1) * t.pageSize;
+  var pageRows = filtered.slice(startIdx, startIdx + t.pageSize);
+
+  var visibleIdx = [];
+  t.columns.forEach(function(col, idx) { if (!t.hiddenCols[idx]) visibleIdx.push(idx); });
+
+  var html = '';
+
+  // ---- Toolbar: view switcher -> status tabs -> reset -> search -> cols ----
+  html += '<div class="status-tabs-row">';
+  html += viewSwitcherHtml();
+  html += '<div class="status-tabs">';
+  html += statusTabHtml('all', 'All', allRows.length, t.filterStatus);
+  html += statusTabHtml('pending', 'Pending', pendingCount, t.filterStatus);
+  if (overdueCount > 0) {
+    html += '<button class="status-tab status-tab-overdue' + (t.filterStatus === 'overdue' ? ' active' : '') + '" onclick="onStatusFilter(\'overdue\')">' +
+      '<span class="material-icons-round" style="font-size:13px;">warning</span>Overdue <span class="status-tab-count">' + overdueCount + '</span></button>';
+  }
+  html += statusTabHtml('completed', 'Completed', completedCount, t.filterStatus);
+  html += '</div>';
+  html += '<button type="button" class="reset-filters-btn" onclick="resetAllFilters()" title="Reset all filters back to default">' +
+    '<span class="material-icons-round">restart_alt</span>Reset Filters</button>';
+  html += '<div class="table-search"><span class="material-icons-round">search</span>' +
+    '<input type="text" id="tableGlobalSearch" placeholder="Search all columns..." value="' + escapeAttr(t.globalSearch) + '" oninput="onGlobalSearch(this.value)"></div>';
+  html += '<div class="table-toolbar-right">';
+  html += '<div class="column-toggle-wrap">' +
+    '<button type="button" class="icon-btn" title="Show/Hide Columns" onclick="toggleColumnPanel(event)"><span class="material-icons-round">view_column</span></button>' +
+    renderColumnPanel(t) +
+    '</div>';
+  html += '<div class="page-size-select">Show ' +
+    '<select id="pageSizeSelect" onchange="onPageSizeChange(this.value)">' +
+    [50, 100, 500, 1000].map(function(n) { return '<option value="' + n + '"' + (t.pageSize === n ? ' selected' : '') + '>' + n + '</option>'; }).join('') +
+    '</select> entries</div>';
+  html += '</div>';
+  html += '</div>';
+
+  if (!visibleIdx.length) {
+    html += '<div class="pending-empty"><span class="material-icons-round">lock</span>' +
+      'You don\'t have permission for any step in this workflow.</div>';
+    document.getElementById('tableContainer').innerHTML = html;
+    return;
+  }
+
+  // Group consecutive visible columns by their step (base columns share
+  // the empty '' group) so each step gets ONE spanning banner cell.
+  var groupSpans = [];
+  visibleIdx.forEach(function(idx) {
+    var g = (t.columnGroups && t.columnGroups[idx]) || '';
+    var last = groupSpans[groupSpans.length - 1];
+    if (last && last.group === g) last.count++;
+    else groupSpans.push({ group: g, count: 1, firstIdx: idx });
+  });
+
+  var stepOrderByName = {};
+  (t.steps || []).forEach(function(s) { stepOrderByName[s.step] = s.order; });
+
+  var DEFAULT_COL_WIDTH = 150;
+  html += '<div class="table-scroll-wrap"><table class="data-table multi-step-table" id="fmsDataTable"><thead>';
+
+  // ---- Grouped step banner row ----
+  html += '<tr class="step-group-row">';
+  html += '<th class="col-serial"></th>';
+  groupSpans.forEach(function(g) {
+    if (!g.group) {
+      html += '<th colspan="' + g.count + '" class="group-base">Details</th>';
+    } else {
+      var order = stepOrderByName[g.group];
+      var label = (order ? 'Step ' + order + ' · ' : '') + g.group;
+      html += '<th colspan="' + g.count + '" class="group-step" title="' + escapeAttr(g.group) + '">' +
+        escapeHtml(label) + '</th>';
+    }
+  });
+  html += '<th class="col-action"></th>';
+  html += '</tr>';
+
+  // ---- Column name row (identical behaviour to Step View) ----
+  html += '<tr>';
+  html += '<th class="col-serial">S.No</th>';
+  visibleIdx.forEach(function(idx) {
+    var arrow = t.sortCol === idx ? (t.sortDir === 'asc' ? ' ▲' : ' ▼') : '';
+    var w = t.colWidths[idx] || DEFAULT_COL_WIDTH;
+    var style = ' style="width:' + w + 'px; min-width:' + w + 'px; max-width:' + w + 'px;"';
+    var isGroupStart = groupSpans.some(function(g) { return g.group && g.firstIdx === idx; });
+    var isDate = isDateColumn(idx);
+    var activeFilter = isDate
+      ? !!(t.colSearch[idx] && (t.colSearch[idx].start || t.colSearch[idx].end))
+      : !!t.colSearch[idx];
+    var filterIcon = isDate ? 'date_range' : 'search';
+    var filterAction = isDate ? 'openDateRangePicker(event,' + idx + ')' : 'openColumnTextFilter(event,' + idx + ')';
+    html += '<th data-col="' + idx + '" class="' + (isGroupStart ? 'col-group-start' : '') + '"' + style + '>' +
+      '<div class="th-inner">' +
+      '<span class="th-label" onclick="onSortColumn(' + idx + ')">' + escapeHtml(t.columns[idx]) + arrow + '</span>' +
+      '<button type="button" class="col-filter-btn' + (activeFilter ? ' active' : '') + '" onclick="' + filterAction + '" title="Filter this column">' +
+      '<span class="material-icons-round">' + filterIcon + '</span></button>' +
+      '</div>' +
+      '<span class="col-resize-handle" onmousedown="startColResize(event,' + idx + ')"></span>' +
+      '</th>';
+  });
+  html += '<th class="col-action">My Steps</th>';
+  html += '</tr></thead><tbody>';
+
+  if (pageRows.length === 0) {
+    html += '<tr><td colspan="' + (visibleIdx.length + 2) + '" class="table-empty-cell">No matching records found.</td></tr>';
+  } else {
+    pageRows.forEach(function(r, i) {
+      html += '<tr class="' + (r.overdue ? 'row-overdue' : '') + '">';
+      html += '<td class="col-serial">' + (startIdx + i + 1) + '</td>';
+      visibleIdx.forEach(function(idx) {
+        var isGroupStart = groupSpans.some(function(g) { return g.group && g.firstIdx === idx; });
+        html += '<td class="' + (isGroupStart ? 'col-group-start' : '') + '">' + renderCellValue(r.cells[idx]) + '</td>';
+      });
+
+      // One chip per step this user owns, in pipeline order
+      html += '<td class="col-action"><div class="step-chips">';
+      (r.steps || []).forEach(function(st) {
+        var label = 'S' + st.order;
+        if (st.status === 'pending') {
+          html += '<button class="step-chip chip-pending' + (st.overdue ? ' chip-overdue' : '') + '" ' +
+            'onclick="openStepForm(\'' + escapeAttr(headerName) + '\',\'' + escapeAttr(st.step) + '\',' + r.row + ')" ' +
+            'title="Fill: ' + escapeAttr(st.step) + (st.overdue ? ' (overdue)' : '') + '">' + label + '</button>';
+        } else if (st.status === 'completed') {
+          html += '<span class="step-chip chip-done" title="Done: ' + escapeAttr(st.step) + '">' +
+            '<span class="material-icons-round">check</span>' + label + '</span>';
+        } else {
+          html += '<span class="step-chip chip-locked" title="Waiting on an earlier step: ' + escapeAttr(st.step) + '">' +
+            '<span class="material-icons-round">lock</span>' + label + '</span>';
+        }
+      });
+      html += '</div></td></tr>';
+    });
+  }
+
+  html += '</tbody></table></div>';
+
+  html += '<div class="table-pagination">';
+  html += '<span class="pagination-info">Showing ' + (filtered.length === 0 ? 0 : startIdx + 1) + '-' + Math.min(startIdx + t.pageSize, filtered.length) + ' of ' + filtered.length + '</span>';
+  html += '<div class="pagination-controls">';
+  html += '<button class="page-btn" ' + (t.page <= 1 ? 'disabled' : '') + ' onclick="onPageChange(' + (t.page - 1) + ')">Prev</button>';
+  html += '<span class="page-indicator">Page ' + t.page + ' of ' + totalPages + '</span>';
+  html += '<button class="page-btn" ' + (t.page >= totalPages ? 'disabled' : '') + ' onclick="onPageChange(' + (t.page + 1) + ')">Next</button>';
+  html += '</div></div>';
+
+  var existingWrap = document.querySelector('#tableContainer .table-scroll-wrap');
+  var savedScrollLeft = existingWrap ? existingWrap.scrollLeft : 0;
+  document.getElementById('tableContainer').innerHTML = html;
+  var newWrap = document.querySelector('#tableContainer .table-scroll-wrap');
+  if (newWrap && savedScrollLeft) newWrap.scrollLeft = savedScrollLeft;
+}
+
 /**
  * Loads a Step's table. If we already have cached data for this exact
  * header+step (from a previous visit or a background auto-refresh), it is
@@ -549,6 +919,11 @@ function loadStepTable(headerName, stepName) {
   FMS.table.colWidths = prefs.colWidths;
   FMS.table.hiddenCols = prefs.hiddenCols;
   FMS.table.hasSavedColPrefs = prefs.hasSavedPrefs;
+  // Clear Table-View-only metadata so a previously opened wide view can't
+  // leak its step grouping / locked columns into this single-step render.
+  FMS.table.columnGroups = [];
+  FMS.table.lockedCols = [];
+  FMS.table.steps = [];
 
   // Compact page-title strip (step name + header as a small breadcrumb)
   // is placed INLINE with the status tabs (same row) - saves one whole
@@ -759,6 +1134,7 @@ function renderDataTable(headerName, stepName) {
   // (right after "FMS Fashion"), not in this toolbar row - see
   // updateTopbarBreadcrumb(), called from loadStepTable()/goHome().
   html += '<div class="status-tabs-row">';
+  html += viewSwitcherHtml();
   html += '<div class="status-tabs">';
   // Order requested: All -> Pending -> Overdue -> Completed
   html += statusTabHtml('all', 'All', allRows.length, t.filterStatus);
@@ -878,11 +1254,19 @@ function renderColumnPanel(t) {
   if (!t.columnPanelOpen) return '<div class="column-panel" id="columnPanel"></div>';
   var html = '<div class="column-panel open" id="columnPanel" onclick="event.stopPropagation()">';
   html += '<div class="column-panel-title">Show / Hide Columns</div>';
+  var locked = t.lockedCols || [];
   t.columns.forEach(function(col, idx) {
-    var checked = !t.hiddenCols[idx] ? ' checked' : '';
-    html += '<label class="column-panel-item">' +
-      '<input type="checkbox"' + checked + ' onchange="toggleColumnVisibility(' + idx + ', this.checked)">' +
+    // Plan-date columns are permanently visible - they're the backbone of
+    // the Table View (seeing what's due across the whole pipeline), so
+    // their checkbox is shown ticked but disabled, with a padlock.
+    var isLocked = locked.indexOf(idx) !== -1;
+    var checked = (!t.hiddenCols[idx] || isLocked) ? ' checked' : '';
+    html += '<label class="column-panel-item' + (isLocked ? ' item-locked' : '') + '"' +
+      (isLocked ? ' title="Plan dates are always visible and cannot be hidden"' : '') + '>' +
+      '<input type="checkbox"' + checked + (isLocked ? ' disabled' : '') +
+      ' onchange="toggleColumnVisibility(' + idx + ', this.checked)">' +
       '<span>' + escapeHtml(col) + '</span>' +
+      (isLocked ? '<span class="material-icons-round column-lock-icon">lock</span>' : '') +
       '</label>';
   });
   html += '<button type="button" class="column-panel-reset" onclick="resetAllColumns()">Show All</button>';
@@ -893,11 +1277,19 @@ function renderColumnPanel(t) {
 function toggleColumnPanel(e) {
   e.stopPropagation();
   FMS.table.columnPanelOpen = !FMS.table.columnPanelOpen;
-  renderDataTable(FMS.currentHeader, FMS.currentStep);
+  rerenderCurrentTable();
 }
 
 function toggleColumnVisibility(idx, isVisible) {
   var t = FMS.table;
+  // Plan-date columns can never be hidden (see renderColumnPanel) - guard
+  // here too, so it holds even if the disabled checkbox is bypassed.
+  if ((t.lockedCols || []).indexOf(idx) !== -1) {
+    delete t.hiddenCols[idx];
+    t.columnPanelOpen = true;
+    rerenderCurrentTable();
+    return;
+  }
   if (isVisible) {
     delete t.hiddenCols[idx];
   } else {
@@ -909,14 +1301,14 @@ function toggleColumnVisibility(idx, isVisible) {
   t.hasSavedColPrefs = true; // user has now made an explicit choice - never auto-override again
   persistColumnPrefs();
   t.columnPanelOpen = true; // keep panel open while toggling checkboxes
-  renderDataTable(FMS.currentHeader, FMS.currentStep);
+  rerenderCurrentTable();
 }
 
 function resetAllColumns() {
   FMS.table.hiddenCols = {};
   FMS.table.hasSavedColPrefs = true;
   persistColumnPrefs();
-  renderDataTable(FMS.currentHeader, FMS.currentStep);
+  rerenderCurrentTable();
 }
 
 function persistColumnPrefs() {
@@ -935,7 +1327,7 @@ document.addEventListener('click', function(e) {
     if (panel && !panel.contains(e.target) && !toggleBtn) {
       FMS.table.columnPanelOpen = false;
       if (document.getElementById('tableContainer')) {
-        renderDataTable(FMS.currentHeader, FMS.currentStep);
+        rerenderCurrentTable();
       }
     }
   }
@@ -982,13 +1374,13 @@ function statusTabHtml(key, label, count, active) {
 function onStatusFilter(status) {
   FMS.table.filterStatus = status;
   FMS.table.page = 1;
-  renderDataTable(FMS.currentHeader, FMS.currentStep);
+  rerenderCurrentTable();
 }
 
 function onGlobalSearch(value) {
   FMS.table.globalSearch = value;
   FMS.table.page = 1;
-  renderDataTable(FMS.currentHeader, FMS.currentStep);
+  rerenderCurrentTable();
   // restore focus after re-render
   var el = document.getElementById('tableGlobalSearch');
   if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
@@ -997,7 +1389,7 @@ function onGlobalSearch(value) {
 function onColumnSearch(colIdx, value) {
   FMS.table.colSearch[colIdx] = value;
   FMS.table.page = 1;
-  renderDataTable(FMS.currentHeader, FMS.currentStep);
+  rerenderCurrentTable();
   // NOTE: no refocus-the-input logic needed here anymore - the text/date
   // filter popovers now live at the document.body level (see
   // ensureTextFilterPopoverExists()/ensureDateRangePickerExists()), so
@@ -1023,7 +1415,7 @@ function resetAllFilters() {
   t.page = 1;
   closeColumnTextFilter();
   closeDateRangePicker();
-  renderDataTable(FMS.currentHeader, FMS.currentStep);
+  rerenderCurrentTable();
 }
 
 // ================================================================
@@ -1343,18 +1735,18 @@ function onSortColumn(colIdx) {
     t.sortCol = colIdx;
     t.sortDir = 'asc';
   }
-  renderDataTable(FMS.currentHeader, FMS.currentStep);
+  rerenderCurrentTable();
 }
 
 function onPageSizeChange(value) {
   FMS.table.pageSize = parseInt(value, 10);
   FMS.table.page = 1;
-  renderDataTable(FMS.currentHeader, FMS.currentStep);
+  rerenderCurrentTable();
 }
 
 function onPageChange(newPage) {
   FMS.table.page = newPage;
-  renderDataTable(FMS.currentHeader, FMS.currentStep);
+  rerenderCurrentTable();
 }
 
 // ===== WORKFLOW: POPUP FORM =====
@@ -1704,14 +2096,18 @@ function submitStepForm() {
         msg.style.display = 'block';
         setTimeout(function() {
           closeModal();
-          // IMPORTANT: do NOT delete the table cache here. loadStepTable()
-          // already renders instantly from the existing cache (so the
-          // header row + pagination bar NEVER disappear/flash) and then
-          // silently re-fetches fresh rows in the background - the exact
-          // same "instant + silent refresh" pattern used everywhere else.
+          // IMPORTANT: do NOT delete the caches here. Both loaders render
+          // instantly from the existing cache (so the header row +
+          // pagination bar NEVER disappear/flash) and then silently
+          // re-fetch fresh rows in the background - the exact same
+          // "instant + silent refresh" pattern used everywhere else.
           // Force-clearing the cache used to make every single submit
           // show a full-page loader that wiped out the header+pagination.
-          loadStepTable(FMS.currentHeader, FMS.currentStep);
+          if (FMS.viewMode === 'table') {
+            loadMultiStepTable(FMS.currentHeader);
+          } else {
+            loadStepTable(FMS.currentHeader, FMS.currentStep);
+          }
         }, 1000);
       } else {
         msg.className = 'form-msg error';
@@ -1727,8 +2123,12 @@ function submitStepForm() {
       msg.textContent = 'Error: ' + err.message;
       msg.style.display = 'block';
     })
+    // Uses currentFormHeader/currentFormStep (set by openStepForm) rather
+    // than currentHeader/currentStep - critical in Table View, where the
+    // form being submitted belongs to whichever step's chip was clicked,
+    // not to a single "currently open" step.
     .wfSubmitStep(FMS_SESSION.sheetUrl, FMS_SESSION.masterSheet, FMS_SESSION.stepsSheet,
-      FMS.currentHeader, FMS.currentStep, FMS.currentFormRow, formValues, FMS.uploadedFiles, FMS_SESSION.userName);
+      FMS.currentFormHeader, FMS.currentFormStep, FMS.currentFormRow, formValues, FMS.uploadedFiles, FMS_SESSION.userName);
 }
 
 function ensureModalExists() {

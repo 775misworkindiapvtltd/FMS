@@ -112,6 +112,9 @@
   <script>
     // Initialize dashboard
     window.onload = function() {
+      // Restore the Step/Table view preference BEFORE anything renders, so
+      // the very first step the user opens already uses their saved view.
+      FMS.viewMode = getStoredViewMode();
       if (typeof FMS_SESSION !== 'undefined') {
         document.getElementById('userDisplay').textContent = FMS_SESSION.userName;
         var initialsEl = document.getElementById('userInitials');

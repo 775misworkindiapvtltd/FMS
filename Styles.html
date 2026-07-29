@@ -723,6 +723,76 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
   font-size: calc(10.5px * var(--content-font-scale)); font-weight: 600;
 }
 
+/* ===== VIEW SWITCHER (Step View / Table View segmented toggle) =====
+   Rendered at the very start of the toolbar line, in BOTH views, so the
+   user can always flip between "one step at a time" and "my whole
+   pipeline side by side" without hunting for the control. */
+.view-switcher {
+  display: flex; align-items: center; gap: 2px; flex-shrink: 0;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 2px;
+}
+.view-switch-btn {
+  display: flex; align-items: center; gap: 5px; padding: 5px 12px; border: none; border-radius: 6px;
+  background: transparent; color: var(--text-secondary); cursor: pointer;
+  font-family: 'Poppins', sans-serif; font-size: calc(11.5px * var(--content-font-scale)); font-weight: 500;
+  transition: var(--transition); white-space: nowrap;
+}
+.view-switch-btn .material-icons-round { font-size: 15px; }
+.view-switch-btn:hover { color: var(--accent); }
+.view-switch-btn.active { background: var(--accent-gradient); color: #fff; }
+
+/* ===== TABLE VIEW (multi-step wide table) =====
+   A grouped banner row sits ABOVE the normal column-name row - one cell
+   per step block, spanning exactly that step's own columns - so it's
+   obvious at a glance which step each group of columns belongs to. Both
+   header rows stack as sticky while the body scrolls underneath. */
+.multi-step-table thead tr.step-group-row th {
+  position: sticky; top: 0; z-index: 3;
+  font-size: calc(10.5px * var(--content-font-scale)); font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.4px;
+  padding: 6px 10px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  border-bottom: 1px solid var(--border);
+  transition: background-color 0.35s ease;
+}
+/* The normal column-name row sits right underneath the banner row, so
+   its own sticky offset must be pushed down by the banner row's height. */
+.multi-step-table thead tr.step-group-row + tr th { top: 30px; }
+.multi-step-table thead tr.step-group-row th.group-base { background: var(--bg-card); color: var(--text-muted); }
+.multi-step-table thead tr.step-group-row th.group-step { background: var(--color-primary-glow); color: var(--color-primary); }
+.multi-step-table thead tr.step-group-row th.col-action { background: var(--bg-card); }
+
+/* Vertical divider at the START of every step's column block - same
+   visual language as .col-before-planned in the Step View, marking
+   where one step's columns end and the next step's begin. */
+.multi-step-table th.col-group-start,
+.multi-step-table td.col-group-start { border-left: 2px solid var(--color-primary); }
+
+/* Per-row step chips - one compact pill per step this user owns, laid
+   out left-to-right in pipeline order inside the "My Steps" column. */
+.step-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.step-chip {
+  display: flex; align-items: center; gap: 3px; padding: 3px 8px; border-radius: 6px;
+  font-family: 'Poppins', sans-serif; font-size: calc(10px * var(--content-font-scale)); font-weight: 600;
+  border: none; cursor: default; white-space: nowrap; transition: var(--transition);
+}
+.step-chip .material-icons-round { font-size: 12px; }
+/* Actionable right now - a real clickable button, opens that step's form */
+.step-chip.chip-pending { background: var(--accent-gradient); color: #fff; cursor: pointer; }
+.step-chip.chip-pending:hover { box-shadow: 0 4px 10px var(--color-primary-glow-strong); transform: translateY(-1px); }
+.step-chip.chip-pending.chip-overdue { background: linear-gradient(135deg, #ff5252, #d32f2f); }
+/* Already completed for this row - green tick, not clickable */
+.step-chip.chip-done { background: rgba(0,230,118,0.12); color: var(--success); }
+/* Not reachable yet (an earlier step still isn't done) - padlock, muted */
+.step-chip.chip-locked { background: var(--bg-card); color: var(--text-muted); border: 1px solid var(--border); }
+
+/* Plan-date columns are permanently visible in Table View (they're the
+   backbone of "what's due across the pipeline") - shown ticked+disabled
+   with a small padlock in the column show/hide panel. */
+.column-panel-item.item-locked { cursor: default; opacity: 0.85; }
+.column-panel-item.item-locked input[type="checkbox"] { cursor: not-allowed; }
+.column-lock-icon { margin-left: auto; font-size: 13px !important; color: var(--text-muted); }
+
 /* ===== OVERDUE HIGHLIGHTING ===== */
 /* A row is overdue when it's still Pending AND its Planned date/time has
    already passed. Subtle tinted background on the whole row + a compact
@@ -1104,6 +1174,8 @@ tr.row-overdue td.col-serial { border-left: 3px solid var(--danger); }
   .table-toolbar-right { flex-wrap: wrap; margin-left: 0; }
   .status-tabs { width: 100%; }
   .table-search { max-width: 100%; }
+  .view-switcher { width: 100%; }
+  .view-switch-btn { flex: 1; justify-content: center; }
 
   .appearance-drawer { width: 100%; max-width: 100%; }
   .display-mode-tiles, .color-scheme-grid { grid-template-columns: repeat(2, 1fr); }
