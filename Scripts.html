@@ -838,12 +838,38 @@ function hasActiveTableFilters(t) {
   return false;
 }
 
-function tablePageHeaderHtml(headerName, title, subtitle) {
+/**
+ * Compact context strip. Title, workflow and the view switcher share ONE
+ * slim line so vertical space goes to data rows instead of decoration.
+ */
+function tablePageHeaderHtml(headerName, title) {
   return '<div class="table-page-header">' +
-    '<div class="table-page-heading"><span class="table-page-eyebrow">' + escapeHtml(headerName) + '</span>' +
-      '<h1>' + escapeHtml(title) + '</h1><p>' + escapeHtml(subtitle) + '</p></div>' +
+    '<div class="table-page-heading">' +
+      '<h1>' + escapeHtml(title) + '</h1>' +
+      '<span class="table-page-eyebrow">' + escapeHtml(headerName) + '</span>' +
+    '</div>' +
     viewSwitcherHtml() +
     '</div>';
+}
+
+/**
+ * Explicit <colgroup> for the data grid.
+ *
+ * REQUIRED for correct column widths: the table is table-layout:fixed, and
+ * in that mode the browser derives every column's width from the FIRST row
+ * only. In Table View the first row is the grouped step banner built from
+ * colspan cells, so per-column widths set on the second (column-name) row
+ * were silently ignored - which is why resizing/width settings appeared to
+ * do nothing there. A colgroup defines the widths independently of any row,
+ * so both views size columns identically and resizing always works.
+ */
+function tableColgroupHtml(visibleIdx, t, defaultWidth) {
+  var html = '<colgroup><col class="col-serial-sizer">';
+  visibleIdx.forEach(function(idx) {
+    var w = t.colWidths[idx] || defaultWidth;
+    html += '<col data-col="' + idx + '" style="width:' + w + 'px;">';
+  });
+  return html + '<col class="col-action-sizer"></colgroup>';
 }
 
 function tableUtilityToolbarHtml(t, allCount, pendingCount, overdueCount, completedCount) {
@@ -908,7 +934,7 @@ function renderMultiStepTable(headerName) {
   t.columns.forEach(function(col, idx) { if (!t.hiddenCols[idx]) visibleIdx.push(idx); });
 
   var html = '';
-  html += tablePageHeaderHtml(headerName, 'All My Steps', 'Review and action your permitted workflow steps in one place.');
+  html += tablePageHeaderHtml(headerName, 'All My Steps');
   html += tableUtilityToolbarHtml(t, allRows.length, pendingCount, overdueCount, completedCount);
 
   if (!visibleIdx.length) {
@@ -931,8 +957,10 @@ function renderMultiStepTable(headerName) {
   var stepOrderByName = {};
   (t.steps || []).forEach(function(s) { stepOrderByName[s.step] = s.order; });
 
-  var DEFAULT_COL_WIDTH = 150;
-  html += '<div class="table-scroll-wrap"><table class="data-table multi-step-table" id="fmsDataTable"><thead>';
+  var DEFAULT_COL_WIDTH = 132;
+  html += '<div class="table-scroll-wrap"><table class="data-table multi-step-table" id="fmsDataTable">';
+  html += tableColgroupHtml(visibleIdx, t, DEFAULT_COL_WIDTH);
+  html += '<thead>';
 
   // ---- Grouped step banner row ----
   html += '<tr class="step-group-row">';
@@ -1247,7 +1275,7 @@ function renderDataTable(headerName, stepName) {
   var plannedColIdx = t.columns.indexOf('Planned');
 
   var html = '';
-  html += tablePageHeaderHtml(headerName, stepName, 'Manage pending work, review completed records and fill this step.');
+  html += tablePageHeaderHtml(headerName, stepName);
   html += tableUtilityToolbarHtml(t, allRows.length, pendingCount, overdueCount, completedCount);
 
   // ---- Table (immediately follows the single toolbar line above) ----
@@ -1264,8 +1292,10 @@ function renderDataTable(headerName, stepName) {
   // columns). Clicking it opens a small popover below that icon to type
   // a search term (or pick a date range) - no more a whole extra table
   // row of search boxes cluttering the header (per user request).
-  var DEFAULT_COL_WIDTH = 150;
-  html += '<div class="table-scroll-wrap"><table class="data-table" id="fmsDataTable"><thead>';
+  var DEFAULT_COL_WIDTH = 132;
+  html += '<div class="table-scroll-wrap"><table class="data-table" id="fmsDataTable">';
+  html += tableColgroupHtml(visibleIdx, t, DEFAULT_COL_WIDTH);
+  html += '<thead>';
   html += '<tr>';
   html += '<th class="col-serial">S.No</th>';
   visibleIdx.forEach(function(idx) {
@@ -1423,7 +1453,10 @@ function startColResize(e, idx) {
   e.preventDefault();
   e.stopPropagation();
   var th = e.target.closest('th');
-  colResizeState = { idx: idx, startX: e.clientX, startWidth: th.offsetWidth, th: th };
+  // The <colgroup> entry is what actually controls width under
+  // table-layout:fixed, so drag updates that element (not just the <th>).
+  var col = document.querySelector('#fmsDataTable colgroup col[data-col="' + idx + '"]');
+  colResizeState = { idx: idx, startX: e.clientX, startWidth: th.offsetWidth, th: th, col: col };
   document.addEventListener('mousemove', onColResizeMove);
   document.addEventListener('mouseup', onColResizeEnd);
 }
@@ -1431,7 +1464,8 @@ function startColResize(e, idx) {
 function onColResizeMove(e) {
   if (!colResizeState) return;
   var delta = e.clientX - colResizeState.startX;
-  var newWidth = Math.max(50, colResizeState.startWidth + delta);
+  var newWidth = Math.max(56, colResizeState.startWidth + delta);
+  if (colResizeState.col) colResizeState.col.style.width = newWidth + 'px';
   colResizeState.th.style.width = newWidth + 'px';
   colResizeState.th.style.minWidth = newWidth + 'px';
   colResizeState.th.style.maxWidth = newWidth + 'px';

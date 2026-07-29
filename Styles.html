@@ -1464,6 +1464,136 @@ body.sidebar-expanded .main-content { margin-left: var(--sidebar-expanded-width)
 .font-size-tiles .font-btn strong { font-size: 13px; }
 .font-size-tiles .font-btn span { font-size: 8.5px; font-weight: 500; }
 
+/* ===========================================================
+   COMPACT DENSITY PASS
+   The application is an operational data tool, so vertical space
+   belongs to rows - not to padding, hero blocks or decoration.
+   Every chrome element below is driven by density tokens that ALSO
+   respond to the A / A+ / A++ setting, so "small" genuinely compacts
+   the whole workspace instead of only shrinking table text.
+   =========================================================== */
+:root {
+  --topbar-height: 52px;
+  --density-gap: 8px;
+  --workspace-pad: 9px;
+  --row-pad-y: 5px;
+  --cell-pad-x: 9px;
+  --control-h: 30px;
+  --strip-h: 38px;
+}
+body.font-small {
+  --density-gap: 6px; --workspace-pad: 7px; --row-pad-y: 3px;
+  --cell-pad-x: 7px; --control-h: 27px; --strip-h: 34px;
+}
+body.font-large {
+  --density-gap: 10px; --workspace-pad: 12px; --row-pad-y: 8px;
+  --cell-pad-x: 11px; --control-h: 34px; --strip-h: 44px;
+}
+
+.main-content { padding: var(--workspace-pad); }
+
+/* Header chrome scaled down to match the slimmer bar */
+.topbar { padding: 0 14px; }
+.topbar-logo-box { width: 30px; height: 30px; border-radius: 8px; }
+.topbar-logo-box .material-icons-round { font-size: 16px; }
+.topbar-title { font-size: 13.5px; }
+.topbar .icon-btn { width: 30px; height: 30px; }
+.topbar .icon-btn .material-icons-round { font-size: 17px; }
+.topbar-action-btn { height: 30px; padding: 0 10px; font-size: 11px; }
+.topbar-action-btn .material-icons-round { font-size: 16px; }
+.topbar .user-avatar-chip { padding: 2px 9px 2px 2px; }
+.topbar .user-avatar-initials { width: 24px; height: 24px; font-size: 10px; }
+.sidebar-header { min-height: var(--topbar-height); height: var(--topbar-height); padding: 8px 10px; }
+.sidebar-brand-mark { width: 30px; height: 30px; flex-basis: 30px; font-size: 16px; }
+
+/* Slim single-line context strip (title + workflow + view switcher) */
+.table-page-header {
+  min-height: var(--strip-h); padding: 0 10px; gap: 10px;
+  border-radius: 9px 9px 0 0;
+}
+.table-page-heading { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.table-page-heading h1 {
+  margin: 0; font-size: calc(13px * var(--content-font-scale)); line-height: 1.2;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.table-page-eyebrow {
+  display: inline; padding-left: 8px; border-left: 1px solid var(--border);
+  font-size: calc(9.5px * var(--content-font-scale)); letter-spacing: .5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.view-switcher { padding: 2px; }
+.view-switch-btn {
+  min-width: 0; height: calc(var(--control-h) - 6px); padding: 0 10px;
+  font-size: calc(10.5px * var(--content-font-scale));
+}
+.view-switch-btn .material-icons-round { font-size: 14px; }
+
+/* Slim utility toolbar */
+.table-utility-toolbar { min-height: var(--strip-h); padding: 4px 8px; gap: 8px; }
+.status-tab { height: var(--control-h); padding: 0 9px; }
+.table-toolbar-actions { gap: 5px; }
+.table-search { flex: 0 1 250px; min-width: 150px; padding: 0 9px; height: var(--control-h); }
+.table-search input { font-size: calc(11.5px * var(--content-font-scale)); }
+.toolbar-btn { height: var(--control-h); padding: 0 9px; }
+
+/* Dense data grid - narrow rows, tight cells, compact headers */
+.table-scroll-wrap { margin-top: var(--density-gap); border-radius: 8px; }
+.data-table { font-size: calc(11.5px * var(--content-font-scale)); }
+.data-table thead th {
+  padding: 5px var(--cell-pad-x); font-size: calc(10.5px * var(--content-font-scale));
+  line-height: 1.25; border-bottom-width: 1px;
+}
+.data-table tbody td {
+  padding: var(--row-pad-y) var(--cell-pad-x); line-height: 1.3;
+}
+.th-inner { gap: 3px; }
+.col-filter-btn { width: 17px; height: 17px; }
+.col-filter-btn .material-icons-round { font-size: 12px; }
+.col-serial { width: 44px; min-width: 44px; max-width: 44px; }
+.col-serial-sizer { width: 44px; }
+.col-action, .col-action-sizer { width: 104px; min-width: 104px; }
+.multi-step-table thead tr.step-group-row th { padding: 4px var(--cell-pad-x); font-size: calc(9.5px * var(--content-font-scale)); }
+.multi-step-table thead tr.step-group-row + tr th { top: 25px; }
+.btn-fill { padding: 4px 10px; font-size: calc(10px * var(--content-font-scale)); }
+.status-badge-done { padding: 3px 8px; }
+.step-chip { padding: 3px 7px; }
+.step-chips { gap: 3px; }
+
+/* Compact footer */
+.table-pagination { min-height: 34px; padding: 5px 2px 0; }
+.pagination-right { gap: 12px; }
+.page-btn { height: 26px; padding: 0 8px; }
+
+/* Home: remove the hero block, keep dense operational cards */
+.home-page { padding: 0 0 10px; }
+.home-header {
+  margin-bottom: var(--density-gap); padding: 10px 12px; border-radius: 9px;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  background: var(--surface-elevated);
+}
+.home-header h2 { font-size: 15px; }
+.home-header .subtitle { display: none; }
+.home-last-updated { padding: 3px 9px; font-size: 9.5px; }
+.home-stats-row { gap: var(--density-gap); margin-bottom: var(--density-gap); }
+.home-stat-card { padding: 10px 12px; gap: 10px; border-radius: 9px; border-top-width: 2px; }
+.home-stat-card .home-stat-icon { width: 32px; height: 32px; font-size: 18px; }
+.home-stat-count { font-size: 20px; }
+.home-stat-hint { display: none; }
+.home-attention-panel { padding: 10px 12px; border-radius: 9px; }
+.attention-items { gap: 6px; margin-top: 8px; }
+.attention-item { padding: 7px 9px; gap: 8px; border-radius: 7px; }
+.attention-icon { width: 25px; height: 25px; font-size: 15px; }
+.workflow-heading { margin: var(--density-gap) 2px 6px; }
+.home-section-heading h3 { font-size: 13px; }
+.home-group { margin-bottom: var(--density-gap); }
+.home-group-title { padding: 0 2px 5px; margin-bottom: 6px; font-size: 12px; }
+.home-cards-grid { grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 8px; }
+.home-step-card { padding: 10px 11px; border-radius: 9px; }
+.home-step-card-title { margin-bottom: 7px; font-size: 11.5px; }
+.home-step-card-counts { font-size: 10px; gap: 5px 10px; }
+.home-step-progress { margin-top: 7px; }
+.home-step-card-footer { margin-top: 6px; }
+
 @media (max-width: 1100px) {
   .home-stats-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .table-utility-toolbar { align-items: stretch; flex-direction: column; gap: 7px; }
@@ -1472,7 +1602,7 @@ body.sidebar-expanded .main-content { margin-left: var(--sidebar-expanded-width)
 }
 
 @media (max-width: 768px) {
-  :root { --topbar-height: 58px; }
+  :root { --topbar-height: 48px; }
   .topbar, body.sidebar-expanded .topbar { left: 0; padding: 0 10px; }
   .topbar-logo-box { display: none; }
   .topbar-action-btn { width: 34px; padding: 0; }
