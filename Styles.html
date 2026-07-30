@@ -1265,6 +1265,25 @@ body.sidebar-expanded .topbar { left: var(--sidebar-expanded-width); }
 }
 .topbar-action-btn:hover { background: rgba(255,255,255,0.18); }
 .topbar-action-btn .material-icons-round { font-size: 17px; }
+
+/* Always-visible sync/last-updated pill in the topbar. Neutral while
+   idle, turns GREEN with a spinning icon the instant a background
+   refresh starts (setSyncingState -> renderLastUpdatedPill), and briefly
+   flashes green again right after data actually changes. */
+.topbar-last-updated {
+  display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 11px;
+  border-radius: 8px; border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.75); font-size: 10.5px; font-weight: 600; white-space: nowrap;
+  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+}
+.topbar-last-updated .sync-icon { font-size: 15px; color: inherit; }
+.topbar-last-updated .sync-icon.syncing { animation: spin-sync 1s linear infinite; }
+.topbar-last-updated.is-syncing {
+  color: #bbf7d0; border-color: rgba(74,222,128,0.4); background: rgba(34,197,94,0.16);
+}
+.topbar-last-updated.updated-flash {
+  color: #bbf7d0; border-color: rgba(74,222,128,0.5); background: rgba(34,197,94,0.22);
+}
 .topbar .user-avatar-chip { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.15); }
 .topbar .user-avatar-name { color: #fff; }
 .topbar .user-avatar-role { color: rgba(255,255,255,0.6); }
@@ -1650,6 +1669,8 @@ body.column-resizing, body.column-resizing * { cursor: col-resize !important; us
   .topbar-logo-box { display: none; }
   .topbar-action-btn { width: 34px; padding: 0; }
   .topbar-action-btn > span:last-child { display: none; }
+  .topbar-last-updated { width: 30px; padding: 0; justify-content: center; }
+  .topbar-last-updated > span:last-child { display: none; }
   .topbar .user-avatar-text { display: none; }
   .topbar .user-avatar-chip { padding: 3px; }
   .sidebar, .sidebar:hover { width: 0; box-shadow: none; }

@@ -31,6 +31,13 @@
       </div>
     </div>
     <div class="topbar-right">
+      <!-- Always-visible sync status: shows the real last-updated time on
+           EVERY page (not just Home), and turns green with a spinning
+           icon the moment a background refresh starts - so the user
+           always sees data refreshing without ever being blocked by it. -->
+      <div class="topbar-last-updated" id="topbarLastUpdated" title="Data syncs automatically in the background">
+        <span class="material-icons-round sync-icon">sync</span><span>Loading latest data...</span>
+      </div>
       <button class="topbar-action-btn" onclick="FMSTheme.openDrawer()" title="Display and appearance settings">
         <span class="material-icons-round">tune</span>
         <span>Appearance</span>
@@ -101,6 +108,8 @@
     // do not wait for window.onload (which can be delayed by web fonts).
     initializeSidebar();
     restoreFontSize();
+    restoreLastSyncTime();
+    restorePersistedCaches();
 
     // Initialize dashboard
     window.onload = function() {
