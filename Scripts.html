@@ -14,7 +14,7 @@ var FMS = {
   autoRefreshTimer: null,
   clockTimer: null,
   syncInFlight: false,
-  AUTO_REFRESH_MS: 5 * 60 * 1000, // 5 minutes
+  AUTO_REFRESH_MS: 10 * 60 * 1000, // 10 minutes
 
   // 'step'  = Step View  - one step at a time (pick it in the sidebar)
   // 'table' = Table View - the whole pipeline side by side, showing only
@@ -172,6 +172,7 @@ function startAutoRefresh() {
 function setSyncingState(isSyncing) {
   var icon = document.getElementById('syncIcon');
   if (icon) icon.classList.toggle('syncing', isSyncing);
+  renderLastUpdatedPill();
 }
 
 // Same "DD Mon YY HH:MM:SS" style used everywhere else in FMS (table
@@ -188,15 +189,58 @@ function formatFmsDate(d) {
   return dd + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
 }
 
+var LAST_SYNC_STORAGE_KEY = 'fms_last_sync_time';
+
+/**
+ * Always-visible "Updated: ..." pill in the topbar (every page, not just
+ * Home) - shows the real last-successful-sync time, persisted across page
+ * reloads so it's never blank/wrong right after opening the app. Turns
+ * green with a spinning icon while a background sync is in flight (see
+ * setSyncingState()), so refreshing is always visibly happening without
+ * ever blocking the UI.
+ */
 function setLastUpdatedNow(changed) {
   FMS.lastSyncTime = new Date();
+  fmsStoreSet(LAST_SYNC_STORAGE_KEY, FMS.lastSyncTime.getTime());
+  renderLastUpdatedPill();
   var el = document.getElementById('lastUpdatedText');
-  if (!el) return;
-  el.textContent = 'Updated: ' + formatFmsDate(FMS.lastSyncTime);
-  if (changed) {
-    el.classList.add('updated-flash');
-    setTimeout(function() { el.classList.remove('updated-flash'); }, 2500);
+  if (el) el.textContent = 'Updated: ' + formatFmsDate(FMS.lastSyncTime);
+  if (changed) flashLastUpdatedPill();
+}
+
+function flashLastUpdatedPill() {
+  var pill = document.getElementById('topbarLastUpdated');
+  if (!pill) return;
+  pill.classList.add('updated-flash');
+  setTimeout(function() { pill.classList.remove('updated-flash'); }, 2200);
+}
+
+function renderLastUpdatedPill() {
+  var pill = document.getElementById('topbarLastUpdated');
+  if (!pill) return;
+  if (FMS.syncInFlight) {
+    pill.classList.add('is-syncing');
+    pill.innerHTML = '<span class="material-icons-round sync-icon syncing">sync</span><span>Refreshing...</span>';
+    return;
   }
+  pill.classList.remove('is-syncing');
+  if (!FMS.lastSyncTime) {
+    pill.innerHTML = '<span class="material-icons-round sync-icon">sync</span><span>Loading latest data...</span>';
+    return;
+  }
+  pill.innerHTML = '<span class="material-icons-round sync-icon">check_circle</span><span>Updated: ' + formatFmsDate(FMS.lastSyncTime) + '</span>';
+}
+
+/**
+ * Restores the last-known sync time from a previous session/page load so
+ * the pill never shows "Loading latest data..." right after the browser
+ * itself was refreshed, even before the first background fetch completes.
+ */
+function restoreLastSyncTime() {
+  var stored = fmsStoreGet(LAST_SYNC_STORAGE_KEY);
+  var ms = parseInt(stored, 10);
+  if (isFinite(ms) && ms > 0) FMS.lastSyncTime = new Date(ms);
+  renderLastUpdatedPill();
 }
 
 /**
@@ -233,6 +277,7 @@ function silentRefreshCurrentView() {
           renderSidebar(res.permissions);
           anyChanged = true;
         }
+        persistPermissionsCache();
       }
       done();
     })
@@ -249,11 +294,13 @@ function silentRefreshCurrentView() {
           var oldStr = JSON.stringify(FMS.homeSummaryCache);
           if (newStr !== oldStr) {
             FMS.homeSummaryCache = res;
+            FMS.homeLastUpdated = new Date();
             if (!FMS.currentHeader && !FMS.currentStep && document.getElementById('mainContent')) {
-              renderHomeDashboard(res);
+              renderHomeDashboard(res, false, true);
             }
             anyChanged = true;
           }
+          persistHomeSummaryCache();
         }
         done();
       })
@@ -470,15 +517,14 @@ function renderSidebar(permissions) {
 function toggleGroup(el) {
   var group = el.parentElement;
 
-  // BUG FIX: the sidebar no longer auto-expands on hover (it was replaced
-  // with a deliberate pin/collapse toggle for a more stable feel). That
-  // silently broke clicking a folder while the rail is collapsed - the
-  // accordion WAS toggling "expanded" internally, but this CSS rule kept
-  // every step hidden regardless:
-  //   .sidebar:not(:hover):not(.pinned) .nav-group-items { max-height: 0 !important; }
-  // so the click appeared to do nothing at all. Clicking a folder now
-  // pins the sidebar open FIRST (when collapsed), so its steps are always
-  // actually visible - exactly like the behaviour before the redesign.
+  // BUG FIX: the sidebar no longer auto-expands on hover (replaced with a
+  // deliberate pin/collapse toggle for a more stable feel). That broke
+  // clicking a folder while the rail is collapsed - the accordion WAS
+  // toggling "expanded" internally, but ".sidebar:not(.pinned)
+  // .nav-group-items { max-height: 0 !important; }" kept every step
+  // hidden, so nothing visibly happened. Clicking a folder now pins the
+  // sidebar open FIRST (if it isn't already), so its steps are always
+  // actually visible, exactly like before.
   var sidebar = document.getElementById('sidebar');
   var wasCollapsed = sidebar && !sidebar.classList.contains('pinned');
   if (wasCollapsed) openSidebar(!isMobileLayout());
@@ -489,20 +535,20 @@ function toggleGroup(el) {
     if (g !== group) g.classList.remove('expanded');
   });
 
-  // If the sidebar had to be expanded just now, always OPEN this group -
-  // a click on a collapsed folder should reveal its steps, never collapse
-  // something the user couldn't even see.
+  // If the sidebar had to be expanded just now, always OPEN this group
+  // (don't toggle it closed) - a click on a collapsed folder should
+  // always reveal its steps, never collapse something invisible.
   if (wasCollapsed) group.classList.add('expanded');
   else group.classList.toggle('expanded');
 }
 
 function openPage(pageName, headerName, evt) {
   closeSidebarAfterNavigation();
-
-  // window.event is deprecated and simply undefined in some browsers
-  // (Firefox) and inside sandboxed iframes, which made the active-item
-  // highlight silently fail. Every caller now passes the real event
-  // explicitly; window.event stays only as a last-resort fallback.
+  // window.event is deprecated/unreliable (undefined in Firefox and in
+  // some sandboxed iframes) - this was the actual root cause of sidebar
+  // clicks silently doing nothing. The onclick handlers now pass the
+  // real event explicitly; window.event is kept only as a last-resort
+  // fallback for any older inline handler that hasn't been updated.
   var clickEvent = evt || window.event;
 
   // Mark active nav item (Home item included, so it un-highlights too)
@@ -562,6 +608,47 @@ function goHome() {
   loadHomeDashboard();
 }
 
+var HOME_SUMMARY_STORAGE_KEY = 'fms_home_summary_cache';
+var PERMISSIONS_STORAGE_KEY = 'fms_permissions_cache';
+
+/**
+ * Persists the Home summary + sidebar permissions to localStorage so that
+ * even a full BROWSER reload (not just switching tabs inside the app)
+ * shows the last-known data instantly, instead of a loading state -
+ * exactly like reopening the app after closing the tab. A silent
+ * background refresh always follows immediately after.
+ */
+// Cache keys are scoped per logged-in user - critical on a shared/kiosk
+// browser, where a second person logging in must NEVER briefly see the
+// previous user's Home numbers or sidebar permissions before the first
+// background refresh happens to overwrite them.
+function currentCacheOwner() {
+  if (typeof FMS_SESSION !== 'undefined' && FMS_SESSION && FMS_SESSION.userName) {
+    return String(FMS_SESSION.userName).trim().toLowerCase();
+  }
+  return 'anonymous';
+}
+function scopedStorageKey(baseKey) {
+  return baseKey + '::' + encodeURIComponent(currentCacheOwner());
+}
+
+function persistHomeSummaryCache() {
+  if (FMS.homeSummaryCache) fmsStoreSet(scopedStorageKey(HOME_SUMMARY_STORAGE_KEY), JSON.stringify(FMS.homeSummaryCache));
+}
+function persistPermissionsCache() {
+  if (FMS.permissionsCache) fmsStoreSet(scopedStorageKey(PERMISSIONS_STORAGE_KEY), JSON.stringify(FMS.permissionsCache));
+}
+function restorePersistedCaches() {
+  try {
+    var home = fmsStoreGet(scopedStorageKey(HOME_SUMMARY_STORAGE_KEY));
+    if (home) FMS.homeSummaryCache = JSON.parse(home);
+  } catch (e) { /* ignore corrupt cache */ }
+  try {
+    var perms = fmsStoreGet(scopedStorageKey(PERMISSIONS_STORAGE_KEY));
+    if (perms) FMS.permissionsCache = JSON.parse(perms);
+  } catch (e) { /* ignore corrupt cache */ }
+}
+
 function loadHomeDashboard() {
   var cached = FMS.homeSummaryCache;
 
@@ -594,6 +681,7 @@ function fetchHomeSummaryInBackground(isFirstLoad) {
       var changed = JSON.stringify(res) !== JSON.stringify(FMS.homeSummaryCache);
       FMS.homeSummaryCache = res;
       FMS.homeLastUpdated = new Date();
+      persistHomeSummaryCache();
       // Only touch the DOM if the user is still on the Home page
       if (!FMS.currentHeader && !FMS.currentStep) {
         renderHomeDashboard(res, false, changed);
@@ -2420,7 +2508,116 @@ function removeFile(fieldName, index) {
   }
 }
 
+// ================================================================
+// OPTIMISTIC STEP COMPLETION
+// The moment Submit is clicked, the row is marked "completed" (and the
+// pipeline's NEXT owned step is unlocked to "pending") directly in the
+// SAME cache objects that both views render from - so the table updates
+// instantly, in real time, while the actual save to the Sheet is still
+// happening in the background. If the save fails, every change is
+// rolled back automatically and the row returns to exactly how it was.
+// ================================================================
+
+function findCachedRowByNumber(cacheEntry, rowNumber) {
+  if (!cacheEntry || !cacheEntry.rows) return null;
+  for (var i = 0; i < cacheEntry.rows.length; i++) {
+    if (cacheEntry.rows[i].row === rowNumber) return cacheEntry.rows[i];
+  }
+  return null;
+}
+
+function recomputeMultiRowAggregate(row) {
+  var anyPending = false, anyOverdue = false, myTotal = row.steps.length, myDone = 0;
+  row.steps.forEach(function(s) {
+    if (s.status === 'completed') myDone++;
+    if (s.status === 'pending') {
+      anyPending = true;
+      if (s.overdue) anyOverdue = true;
+    }
+  });
+  row.status = anyPending ? 'pending' : ((myTotal > 0 && myDone === myTotal) ? 'completed' : 'locked');
+  row.overdue = anyOverdue;
+}
+
+/**
+ * Applies the optimistic update in place and returns a revert() function
+ * that restores every touched field to its exact previous value, plus
+ * flags for which view(s) actually have data to re-render.
+ */
+function applyOptimisticStepCompletion(headerName, stepName, rowNumber) {
+  var changes = [];
+  function track(obj, prop, value) {
+    changes.push({ obj: obj, prop: prop, prev: obj[prop] });
+    obj[prop] = value;
+  }
+
+  var touchedStepView = false;
+  var touchedMultiView = false;
+  var stepNameUpper = String(stepName).trim().toUpperCase();
+
+  // Step View cache: the row this exact step owns moves straight to
+  // "completed" (its Actual is what's being written right now).
+  var stepCacheEntry = FMS.tableCache[headerName + '|||' + stepName];
+  var stepRow = findCachedRowByNumber(stepCacheEntry, rowNumber);
+  if (stepRow) {
+    track(stepRow, 'status', 'completed');
+    track(stepRow, 'overdue', false);
+    touchedStepView = true;
+  }
+
+  // Table View cache: update this step's chip to "completed", unlock the
+  // immediately next PIPELINE step for this row if it's one the user owns
+  // and is currently locked (safe because "next step becomes actionable"
+  // is exactly what filling THIS step's Actual guarantees), then
+  // recompute the row's own aggregate status/overdue from all its steps.
+  var multiCacheEntry = FMS.multiTableCache[headerName];
+  var multiRow = findCachedRowByNumber(multiCacheEntry, rowNumber);
+  if (multiRow && multiRow.steps) {
+    var completedEntry = null;
+    multiRow.steps.forEach(function(s) {
+      if (String(s.step).trim().toUpperCase() === stepNameUpper) completedEntry = s;
+    });
+    if (completedEntry) {
+      track(completedEntry, 'status', 'completed');
+      track(completedEntry, 'overdue', false);
+
+      var nextEntry = null;
+      multiRow.steps.forEach(function(s) {
+        if (s.order === completedEntry.order + 1) nextEntry = s;
+      });
+      if (nextEntry && nextEntry.status === 'locked') {
+        track(nextEntry, 'status', 'pending');
+        track(nextEntry, 'overdue', false);
+      }
+
+      track(multiRow, 'status', multiRow.status);   // snapshot before recompute
+      track(multiRow, 'overdue', multiRow.overdue);
+      recomputeMultiRowAggregate(multiRow);
+      touchedMultiView = true;
+    }
+  }
+
+  return {
+    touchedStepView: touchedStepView,
+    touchedMultiView: touchedMultiView,
+    revert: function() {
+      for (var i = changes.length - 1; i >= 0; i--) {
+        changes[i].obj[changes[i].prop] = changes[i].prev;
+      }
+    }
+  };
+}
+
+// Guards against a second Submit firing before the first one resolves
+// (double-click, slow network, Enter key). Without this, a second
+// optimistic mutation would capture the ALREADY-optimistic values as its
+// "previous" state, so a later failure would roll back to the wrong
+// values instead of the original server-confirmed ones.
+FMS.submitInFlight = false;
+
 function submitStepForm() {
+  if (FMS.submitInFlight) return;
+
   var body = document.getElementById('modalBody');
   var formValues = {};
 
@@ -2431,12 +2628,31 @@ function submitStepForm() {
     if (input) formValues[name] = input.value;
   });
 
+  FMS.submitInFlight = true;
   var submitBtn = document.getElementById('modalSubmitBtn');
   submitBtn.disabled = true;
   submitBtn.textContent = 'Saving...';
 
+  // Capture NOW - the modal/currentForm* state may change (or the modal
+  // may be closed) before the server call resolves.
+  var targetHeader = FMS.currentFormHeader;
+  var targetStep = FMS.currentFormStep;
+  var targetRow = FMS.currentFormRow;
+
+  // Update the UI INSTANTLY - the row flips to completed/unlocks the next
+  // step right now, in whichever view is currently on screen, without
+  // waiting for the round trip to Google Sheets to finish.
+  var optimistic = applyOptimisticStepCompletion(targetHeader, targetStep, targetRow);
+  if ((optimistic.touchedStepView && FMS.viewMode !== 'table') ||
+      (optimistic.touchedMultiView && FMS.viewMode === 'table')) {
+    if (FMS.currentHeader === targetHeader && document.getElementById('tableContainer')) {
+      rerenderCurrentTable();
+    }
+  }
+
   google.script.run
     .withSuccessHandler(function(res) {
+      FMS.submitInFlight = false;
       submitBtn.disabled = false;
       submitBtn.textContent = 'Submit';
       var msg = document.getElementById('modalMsg');
@@ -2447,27 +2663,37 @@ function submitStepForm() {
         setTimeout(function() {
           closeModal();
           // IMPORTANT: do NOT delete the caches here. Both loaders render
-          // instantly from the existing cache (so the header row +
-          // pagination bar NEVER disappear/flash) and then silently
-          // re-fetch fresh rows in the background - the exact same
-          // "instant + silent refresh" pattern used everywhere else.
-          // Force-clearing the cache used to make every single submit
-          // show a full-page loader that wiped out the header+pagination.
+          // instantly from the existing cache (already showing the
+          // optimistic "completed" state applied above - no flash back to
+          // "pending") and then silently re-fetch the confirmed rows in
+          // the background, the exact same "instant + silent refresh"
+          // pattern used everywhere else.
           if (FMS.viewMode === 'table') {
             loadMultiStepTable(FMS.currentHeader);
           } else {
             loadStepTable(FMS.currentHeader, FMS.currentStep);
           }
-        }, 1000);
+        }, 700);
       } else {
+        // Server rejected the save (validation, permissions, etc.) - roll
+        // the optimistic change back so the row honestly reflects reality.
+        optimistic.revert();
+        if (FMS.currentHeader === targetHeader && document.getElementById('tableContainer')) {
+          rerenderCurrentTable();
+        }
         msg.className = 'form-msg error';
         msg.textContent = res.message;
         msg.style.display = 'block';
       }
     })
     .withFailureHandler(function(err) {
+      FMS.submitInFlight = false;
       submitBtn.disabled = false;
       submitBtn.textContent = 'Submit';
+      optimistic.revert();
+      if (FMS.currentHeader === targetHeader && document.getElementById('tableContainer')) {
+        rerenderCurrentTable();
+      }
       var msg = document.getElementById('modalMsg');
       msg.className = 'form-msg error';
       msg.textContent = 'Error: ' + err.message;
@@ -2478,7 +2704,7 @@ function submitStepForm() {
     // form being submitted belongs to whichever step's chip was clicked,
     // not to a single "currently open" step.
     .wfSubmitStep(FMS_SESSION.sheetUrl, FMS_SESSION.masterSheet, FMS_SESSION.stepsSheet,
-      FMS.currentFormHeader, FMS.currentFormStep, FMS.currentFormRow, formValues, FMS.uploadedFiles, FMS_SESSION.userName);
+      targetHeader, targetStep, targetRow, formValues, FMS.uploadedFiles, FMS_SESSION.userName);
 }
 
 function ensureModalExists() {
