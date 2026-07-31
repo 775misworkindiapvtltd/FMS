@@ -452,7 +452,7 @@ function renderSidebar(permissions) {
     html += '</div>';
     html += '<div class="nav-group-items">';
     for (var i = 0; i < items.length; i++) {
-      html += '<div class="nav-item" onclick="openPage(\'' + escapeAttr(items[i]) + '\', \'' + escapeAttr(header) + '\')" title="' + escapeAttr(items[i]) + '">';
+      html += '<div class="nav-item" onclick="openPage(\'' + escapeAttr(items[i]) + '\', \'' + escapeAttr(header) + '\', event)" title="' + escapeAttr(items[i]) + '">';
       html += '<span class="material-icons-round">chevron_right</span>';
       html += '<span>' + escapeHtml(items[i]) + '</span>';
       html += '</div>';
@@ -469,22 +469,47 @@ function renderSidebar(permissions) {
 
 function toggleGroup(el) {
   var group = el.parentElement;
+
+  // BUG FIX: the sidebar no longer auto-expands on hover (it was replaced
+  // with a deliberate pin/collapse toggle for a more stable feel). That
+  // silently broke clicking a folder while the rail is collapsed - the
+  // accordion WAS toggling "expanded" internally, but this CSS rule kept
+  // every step hidden regardless:
+  //   .sidebar:not(:hover):not(.pinned) .nav-group-items { max-height: 0 !important; }
+  // so the click appeared to do nothing at all. Clicking a folder now
+  // pins the sidebar open FIRST (when collapsed), so its steps are always
+  // actually visible - exactly like the behaviour before the redesign.
+  var sidebar = document.getElementById('sidebar');
+  var wasCollapsed = sidebar && !sidebar.classList.contains('pinned');
+  if (wasCollapsed) openSidebar(!isMobileLayout());
+
   // Close all other groups
   var allGroups = document.querySelectorAll('.nav-group');
   allGroups.forEach(function(g) {
     if (g !== group) g.classList.remove('expanded');
   });
-  group.classList.toggle('expanded');
+
+  // If the sidebar had to be expanded just now, always OPEN this group -
+  // a click on a collapsed folder should reveal its steps, never collapse
+  // something the user couldn't even see.
+  if (wasCollapsed) group.classList.add('expanded');
+  else group.classList.toggle('expanded');
 }
 
-function openPage(pageName, headerName) {
+function openPage(pageName, headerName, evt) {
   closeSidebarAfterNavigation();
+
+  // window.event is deprecated and simply undefined in some browsers
+  // (Firefox) and inside sandboxed iframes, which made the active-item
+  // highlight silently fail. Every caller now passes the real event
+  // explicitly; window.event stays only as a last-resort fallback.
+  var clickEvent = evt || window.event;
 
   // Mark active nav item (Home item included, so it un-highlights too)
   var items = document.querySelectorAll('.nav-item');
   items.forEach(function(item) { item.classList.remove('active'); });
-  if (window.event && window.event.target) {
-    var clicked = window.event.target.closest('.nav-item');
+  if (clickEvent && clickEvent.target && clickEvent.target.closest) {
+    var clicked = clickEvent.target.closest('.nav-item');
     if (clicked) clicked.classList.add('active');
   }
 
@@ -679,7 +704,7 @@ function homeStatCardHtml(label, count, icon, extraClass, pct, hint) {
 }
 
 function homeAttentionItemHtml(headerName, stepEntry) {
-  return '<button type="button" class="attention-item" onclick="openPage(\'' + escapeAttr(stepEntry.step) + '\', \'' + escapeAttr(headerName) + '\')">' +
+  return '<button type="button" class="attention-item" onclick="openPage(\'' + escapeAttr(stepEntry.step) + '\', \'' + escapeAttr(headerName) + '\', event)">' +
     '<span class="attention-icon material-icons-round">priority_high</span>' +
     '<span class="attention-copy"><strong>' + escapeHtml(stepEntry.step) + '</strong><small>' + escapeHtml(headerName) + '</small></span>' +
     '<span class="attention-count">' + (stepEntry.overdue || 0) + ' overdue</span>' +
@@ -695,7 +720,7 @@ function homeStepCardHtml(headerName, stepEntry) {
   var total = pending + completed;
   var completedPct = total > 0 ? Math.round((completed / total) * 100) : 0;
 
-  var html = '<article class="home-step-card' + (pending > 0 ? ' has-pending' : '') + (overdue > 0 ? ' has-overdue' : '') + '" onclick="openPage(\'' + escapeAttr(stepEntry.step) + '\', \'' + escapeAttr(headerName) + '\')">';
+  var html = '<article class="home-step-card' + (pending > 0 ? ' has-pending' : '') + (overdue > 0 ? ' has-overdue' : '') + '" onclick="openPage(\'' + escapeAttr(stepEntry.step) + '\', \'' + escapeAttr(headerName) + '\', event)">';
   html += '<div class="home-step-card-head"><div class="home-step-card-title">' + escapeHtml(stepEntry.step) + '</div>' +
     '<span class="material-icons-round">arrow_outward</span></div>';
 
