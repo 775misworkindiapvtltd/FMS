@@ -47,6 +47,11 @@ var FMS_DRIVE_FOLDER_ID = '';
 // request of the day.
 var FMS_CACHE_TTL_SECONDS = 600; // 10 minutes - matches the client's own auto-refresh interval
 
+// Human-readable deployment fingerprint. It is shown on the login page and
+// by fmsDiagnose(), making it immediately obvious when an old /exec version
+// or a different Apps Script project is being opened.
+var FMS_BUILD_ID = '2026-07-22-runtime-safe-1';
+
 function fmsCacheKey(parts) {
   return 'fms_v1_' + parts.map(function (p) { return String(p); }).join('|');
 }
@@ -103,7 +108,7 @@ function fmsScheduledRefresh() {
       if (!login || login === 'undefined') continue;
 
       try {
-        var homeResult = getHomeSummary(FMS_SHEET_URL, FMS_MASTER_SHEET, FMS_STEPS_SHEET, login);
+        var homeResult = getHomeSummaryComputeFresh(FMS_SHEET_URL, FMS_MASTER_SHEET, FMS_STEPS_SHEET, login);
         if (homeResult && homeResult.success) {
           fmsCacheSet(fmsCacheKey(['home', login]), homeResult);
         }
@@ -146,14 +151,114 @@ function isFmsAutoRefreshTriggerInstalled() {
   return false;
 }
 
-function doGet() {
-  // FMS_DOGET_MARKER - do not remove. fmsDiagnose() looks for this string
-  // to confirm THIS doGet() is the one Apps Script is actually serving.
-  return HtmlService.createTemplateFromFile('Login')
-    .evaluate()
-    .setTitle('FMS - Flow Management System')
+// ============================================
+// DEPLOYMENT CONTRACT + WEB ENTRY POINT
+// ============================================
+// Apps Script deployments are immutable snapshots. Saving new files does
+// NOT update an existing /exec URL until that deployment is edited and a
+// "New version" is selected. These checks make an incomplete/mixed snapshot
+// fail before login with a useful setup page instead of later throwing
+// "validateLogin is not a function" or "formatResult is not defined".
+function fmsGetRuntimeInfo() {
+  var requiredFunctions = {
+    'validateLogin': typeof validateLogin,
+    'getUserPermissions': typeof getUserPermissions,
+    'getDashboardHtml': typeof getDashboardHtml,
+    'include': typeof include,
+    'calculateTAT': typeof calculateTAT,
+    'formatDateSafe': typeof formatDateSafe,
+    'wfGetHomeSummary': typeof wfGetHomeSummary,
+    'wfGetStepTableData': typeof wfGetStepTableData,
+    'wfGetMultiStepTableData': typeof wfGetMultiStepTableData,
+    'wfGetStepForm': typeof wfGetStepForm,
+    'wfSubmitStep': typeof wfSubmitStep
+  };
+  var missing = [];
+  for (var name in requiredFunctions) {
+    if (requiredFunctions[name] !== 'function') missing.push(name + '()');
+  }
+
+  // Raw existence checks catch missing include files; evaluating both page
+  // templates additionally catches broken include names/scriptlets now,
+  // before a user can pass login and hit a blank Dashboard.
+  var requiredHtml = ['Login', 'Dashboard', 'Scripts', 'Styles', 'ThemeEngine'];
+  for (var i = 0; i < requiredHtml.length; i++) {
+    try {
+      HtmlService.createHtmlOutputFromFile(requiredHtml[i]);
+    } catch (e) {
+      missing.push(requiredHtml[i] + '.html');
+    }
+  }
+  var templates = ['Login', 'Dashboard'];
+  for (var t = 0; t < templates.length; t++) {
+    try {
+      HtmlService.createTemplateFromFile(templates[t]).evaluate().getContent();
+    } catch (templateError) {
+      missing.push(templates[t] + '.html render (' + templateError.message + ')');
+    }
+  }
+
+  return {
+    success: missing.length === 0,
+    buildId: FMS_BUILD_ID,
+    missing: missing,
+    message: missing.length ? 'Missing from this deployed version: ' + missing.join(', ') : 'FMS runtime is complete.'
+  };
+}
+
+function fmsEscapeHtmlServer(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function fmsRuntimeStatusPage(info, isExplicitCheck) {
+  var ok = info && info.success;
+  var title = ok ? 'FMS deployment is ready' : 'FMS deployment is incomplete';
+  var detail = ok
+    ? 'Login, dashboard, table, form and workflow server functions are available.'
+    : fmsEscapeHtmlServer((info && info.message) || 'Unknown deployment error.');
+  var next = ok
+    ? 'You can remove ?fms_check=1 from the URL and use the application.'
+    : 'Open the Apps Script project attached to THIS deployment, replace the required files, save, then use Deploy > Manage deployments > Edit > New version. Do not create a second deployment URL unless you intend to switch URLs.';
+  var html = '<!doctype html><html><head><base target="_top"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<title>' + title + '</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0f172a;color:#e2e8f0;font:14px Arial,sans-serif}' +
+    '.card{max-width:720px;margin:24px;padding:28px;border:1px solid #334155;border-radius:16px;background:#111827;box-shadow:0 20px 50px #0006}' +
+    'h1{margin:0 0 12px;color:' + (ok ? '#4ade80' : '#fb7185') + '}p{line-height:1.6}.build{color:#94a3b8;font-family:monospace}.next{padding:14px;border-radius:10px;background:#1e293b}</style></head><body><main class="card">' +
+    '<h1>' + title + '</h1><p>' + detail + '</p><p class="build">Build: ' + fmsEscapeHtmlServer((info && info.buildId) || FMS_BUILD_ID) + '</p>' +
+    '<p class="next">' + fmsEscapeHtmlServer(next) + '</p>' +
+    (isExplicitCheck ? '' : '<p>The application was stopped before login so it cannot fail halfway through loading a table or saving a form.</p>') +
+    '</main></body></html>';
+  return HtmlService.createHtmlOutput(html)
+    .setTitle(title)
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+function doGet(e) {
+  // FMS_DOGET_MARKER - do not remove. fmsDiagnose() looks for this string
+  // to confirm THIS doGet() is the one Apps Script is actually serving.
+  var runtime = fmsGetRuntimeInfo();
+  var explicitCheck = !!(e && e.parameter && String(e.parameter.fms_check) === '1');
+  if (explicitCheck || !runtime.success) return fmsRuntimeStatusPage(runtime, explicitCheck);
+
+  try {
+    return HtmlService.createTemplateFromFile('Login')
+      .evaluate()
+      .setTitle('FMS - Flow Management System')
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+  } catch (err) {
+    return fmsRuntimeStatusPage({
+      success: false,
+      buildId: FMS_BUILD_ID,
+      missing: [],
+      message: 'Login template could not be rendered: ' + err.message
+    }, false);
+  }
 }
 
 /**
@@ -172,6 +277,14 @@ function doGet() {
 function fmsDiagnose() {
   var lines = [];
   lines.push('===== FMS SETUP CHECK =====');
+  lines.push('BUILD    ' + FMS_BUILD_ID);
+  try {
+    var deployedUrl = ScriptApp.getService().getUrl();
+    lines.push(deployedUrl ? 'WEB APP ' + deployedUrl : 'PROBLEM  This script has no web-app deployment URL yet.');
+    if (deployedUrl) lines.push('CHECK    ' + deployedUrl + '?fms_check=1');
+  } catch (serviceErr) {
+    lines.push('PROBLEM  Could not read the web-app deployment URL: ' + serviceErr.message);
+  }
 
   // 1) Is the doGet() being served actually FMS's one?
   try {
@@ -218,9 +331,12 @@ function fmsDiagnose() {
     'getUserPermissions': typeof getUserPermissions,
     'getDashboardHtml': typeof getDashboardHtml,
     'include': typeof include,
+    'calculateTAT': typeof calculateTAT,
+    'formatDateSafe': typeof formatDateSafe,
     'wfGetHomeSummary': typeof wfGetHomeSummary,
     'wfGetStepTableData': typeof wfGetStepTableData,
     'wfGetMultiStepTableData': typeof wfGetMultiStepTableData,
+    'wfGetStepForm': typeof wfGetStepForm,
     'wfSubmitStep': typeof wfSubmitStep
   };
   for (var name in fns) {
@@ -280,6 +396,12 @@ function include(filename) {
 // ============================================
 function validateLogin(loginId, password) {
   try {
+    var normalizedLoginId = String(loginId == null ? '' : loginId).trim();
+    var normalizedPassword = String(password == null ? '' : password);
+    if (!normalizedLoginId || !normalizedPassword) {
+      return { success: false, message: 'Login ID and Password are required.', buildId: FMS_BUILD_ID };
+    }
+
     var ss = SpreadsheetApp.openByUrl(FMS_SHEET_URL);
     var sheet = ss.getSheetByName(FMS_MASTER_SHEET);
     
@@ -302,7 +424,7 @@ function validateLogin(loginId, password) {
       
       if (sheetLogin === '' || sheetLogin === 'undefined') continue;
       
-      if (sheetLogin.toUpperCase() === loginId.toUpperCase() && sheetPassword === password) {
+      if (sheetLogin.toUpperCase() === normalizedLoginId.toUpperCase() && sheetPassword === normalizedPassword) {
         return { 
           success: true, 
           message: 'Login Successful! Welcome ' + userName,
@@ -311,7 +433,8 @@ function validateLogin(loginId, password) {
           sheetUrl: FMS_SHEET_URL,
           masterSheet: FMS_MASTER_SHEET,
           stepsSheet: FMS_STEPS_SHEET,
-          dropdownSheet: FMS_DROPDOWN_SHEET
+          dropdownSheet: FMS_DROPDOWN_SHEET,
+          buildId: FMS_BUILD_ID
         };
       }
     }

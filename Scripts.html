@@ -1060,15 +1060,22 @@ function tablePageHeaderHtml(headerName, title) {
  * do nothing there. A colgroup defines the widths independently of any row,
  * so both views size columns identically and resizing always works.
  */
+function compactStepsColumnWidth() {
+  // 20px numeric chips + 3px gaps + compact cell padding. Width grows only
+  // enough to keep every owned step on one line, avoiding tall wrapped rows.
+  var count = Math.max(1, (FMS.table.steps || []).length);
+  return Math.max(64, Math.min(320, 12 + (count * 20) + (Math.max(0, count - 1) * 3)));
+}
+
 function defaultColumnWidth(key) {
   if (key === '__serial') return 44;
-  if (key === '__action') return 104;
+  if (key === '__action') return FMS.viewMode === 'table' ? compactStepsColumnWidth() : 104;
   return 132;
 }
 
 function columnWidthBounds(key) {
   if (key === '__serial') return { min: 40, max: 160 };
-  if (key === '__action') return { min: 72, max: 420 };
+  if (key === '__action') return { min: FMS.viewMode === 'table' ? compactStepsColumnWidth() : 72, max: 420 };
   return { min: 56, max: 600 };
 }
 
@@ -1221,7 +1228,7 @@ function renderMultiStepTable(headerName) {
       '<span class="col-resize-handle" onmousedown="startColResize(event,' + idx + ')" ontouchstart="startColResize(event,' + idx + ')"></span>' +
       '</th>';
   });
-  html += '<th class="col-action" data-col="__action">My Steps' +
+  html += '<th class="col-action" data-col="__action">Steps' +
     '<span class="col-resize-handle col-resize-handle-left" onmousedown="startColResize(event,\'__action\')" ontouchstart="startColResize(event,\'__action\')"></span></th>';
   html += '</tr></thead><tbody>';
 
@@ -1236,20 +1243,20 @@ function renderMultiStepTable(headerName) {
         html += '<td class="' + (isGroupStart ? 'col-group-start' : '') + '">' + renderCellValue(r.cells[idx]) + '</td>';
       });
 
-      // One chip per step this user owns, in pipeline order
+      // Numeric state chips keep the action column narrow: color carries
+      // pending/completed/locked state and the tooltip retains full detail.
       html += '<td class="col-action"><div class="step-chips">';
       (r.steps || []).forEach(function(st) {
-        var label = 'Step ' + st.order;
+        var label = String(st.order);
         if (st.status === 'pending') {
           html += '<button class="step-chip chip-pending' + (st.overdue ? ' chip-overdue' : '') + '" ' +
             'onclick="openStepForm(\'' + escapeAttr(headerName) + '\',\'' + escapeAttr(st.step) + '\',' + r.row + ')" ' +
+            'aria-label="Fill step ' + st.order + ': ' + escapeAttr(st.step) + '" ' +
             'title="Fill: ' + escapeAttr(st.step) + (st.overdue ? ' (overdue)' : '') + '">' + label + '</button>';
         } else if (st.status === 'completed') {
-          html += '<span class="step-chip chip-done" title="Done: ' + escapeAttr(st.step) + '">' +
-            '<span class="material-icons-round">check</span>' + label + '</span>';
+          html += '<span class="step-chip chip-done" aria-label="Step ' + st.order + ' completed" title="Done: ' + escapeAttr(st.step) + '">' + label + '</span>';
         } else {
-          html += '<span class="step-chip chip-locked" title="Waiting on an earlier step: ' + escapeAttr(st.step) + '">' +
-            '<span class="material-icons-round">lock</span>' + label + '</span>';
+          html += '<span class="step-chip chip-locked" aria-label="Step ' + st.order + ' locked" title="Waiting on an earlier step: ' + escapeAttr(st.step) + '">' + label + '</span>';
         }
       });
       html += '</div></td></tr>';
@@ -1618,7 +1625,7 @@ function systemColumnConfigHtml(key, label, icon, t) {
 
 function renderColumnPanel(t) {
   if (!t.columnPanelOpen) return '<div class="column-panel" id="columnPanel"></div>';
-  var actionLabel = FMS.viewMode === 'table' ? 'My Steps' : 'Action';
+  var actionLabel = FMS.viewMode === 'table' ? 'Steps' : 'Action';
   var html = '<div class="column-panel open" id="columnPanel" onclick="event.stopPropagation()">';
   html += '<div class="column-panel-title">Columns &amp; Widths</div>' +
     '<div class="column-panel-hint">Drag any header edge, or set an exact width below.</div>';

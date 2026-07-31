@@ -480,10 +480,19 @@ function getRowSummary(sheet, rowNumber, firstStepStartCol) {
 
 function formatDateSafe(val) {
   if (val === null || val === undefined || val === '') return '';
-  if (val instanceof Date) {
-    return formatResult(val); // reuses formatResult() from TAT_Calculator.gs
-  }
-  return String(val);
+  if (!(val instanceof Date)) return String(val);
+
+  // Keep this formatter local and self-contained. Table/dashboard rendering
+  // must not depend on TAT_Calculator.gs's test/display helper being present
+  // in a particular deployment version. This intentionally mirrors the
+  // fixed FMS display format without calling any function from another file.
+  var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  var pad2 = function (n) { return ('0' + n).slice(-2); };
+  var datePart = pad2(val.getDate()) + ' ' + months[val.getMonth()] + ' ' + pad2(val.getFullYear() % 100);
+  var isMidnight = val.getHours() === 0 && val.getMinutes() === 0 && val.getSeconds() === 0;
+
+  if (isMidnight) return datePart;
+  return datePart + ' ' + pad2(val.getHours()) + ':' + pad2(val.getMinutes()) + ':' + pad2(val.getSeconds());
 }
 
 // ============================================

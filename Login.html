@@ -112,6 +112,7 @@
     @keyframes msgIn { from { opacity:0; transform:scale(0.9); } to { opacity:1; transform:scale(1); } }
     .msg.success { display: block; background: rgba(0,200,83,0.1); color: #00e676; border: 1px solid rgba(0,200,83,0.2); }
     .msg.error { display: block; background: rgba(233,69,96,0.1); color: #ff5252; border: 1px solid rgba(233,69,96,0.2); }
+    .build-id { margin-top: 13px; text-align: center; color: rgba(255,255,255,0.28); font: 10px/1.2 monospace; }
 
     @media (max-width:480px) {
       .login-card { width: 92%; padding: 28px 22px; }
@@ -148,6 +149,7 @@
     </button>
 
     <div class="msg" id="msg"></div>
+    <div class="build-id">Build <?= FMS_BUILD_ID ?></div>
   </div>
 
   <script>
@@ -169,27 +171,50 @@
         return;
       }
 
+      var settled = false;
+      var timeoutId = setTimeout(function() {
+        if (settled) return;
+        settled = true;
+        onFailure({ message: 'Server did not respond within 45 seconds. Check your connection, then run fmsDiagnose() and open the exact WEB APP URL shown in its log.' });
+      }, 45000);
+
+      function succeed(value) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        onSuccess(value);
+      }
+
+      function fail(error) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        onFailure(error || { message: 'Unknown server error.' });
+      }
+
       var runner;
       try {
-        runner = google.script.run.withSuccessHandler(onSuccess).withFailureHandler(onFailure);
+        runner = google.script.run.withSuccessHandler(succeed).withFailureHandler(fail);
       } catch (e) {
-        onFailure({ message: 'Could not reach the server: ' + e.message });
+        fail({ message: 'Could not reach the server: ' + e.message });
         return;
       }
 
       if (typeof runner[fnName] !== 'function') {
-        onFailure({ message: 'Setup incomplete: server function "' + fnName + '()" was not found in this Apps Script project.\n\n' +
-          '1. Confirm Code.gs, WorkflowEngine.gs and TAT_Calculator.gs are all pasted in and SAVED (Ctrl+S).\n' +
-          '2. Delete any leftover starter-kit file.\n' +
-          '3. Run fmsDiagnose() from the editor to see exactly what is missing.\n' +
-          '4. Redeploy: Deploy > Manage deployments > Edit > Version: New version.' });
+        fail({ message: 'Deployment mismatch: server function "' + fnName + '()" is not in the Apps Script version behind this URL.\n\n' +
+          '1. Open the SAME Apps Script project used by this /exec URL.\n' +
+          '2. Replace and SAVE Code.gs, WorkflowEngine.gs and TAT_Calculator.gs.\n' +
+          '3. Delete any leftover starter-kit Code/Index/Main file.\n' +
+          '4. Run fmsDiagnose(); open the WEB APP URL printed in its log.\n' +
+          '5. Deploy > Manage deployments > Edit > Version: New version.\n\n' +
+          'Adding files to a different project or only saving without a New version does not update an existing /exec URL.' });
         return;
       }
 
       try {
         runner[fnName].apply(runner, args || []);
       } catch (e) {
-        onFailure({ message: 'Could not start "' + fnName + '()": ' + e.message });
+        fail({ message: 'Could not start "' + fnName + '()": ' + e.message });
       }
     }
 
