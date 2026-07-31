@@ -151,29 +151,72 @@
   </div>
 
   <script>
+    /**
+     * Safely starts a google.script.run call.
+     *
+     * WHY THIS EXISTS: calling google.script.run.someMissingFunction()
+     * throws a SYNCHRONOUS TypeError ("... is not a function") when that
+     * server function isn't present in the Apps Script project. Because it
+     * throws instead of failing asynchronously, withFailureHandler() never
+     * runs - so the login button used to spin forever while the only clue
+     * sat hidden in the browser console. This checks the function exists
+     * first and routes every failure through onFailure(), so the UI always
+     * recovers and always explains what to fix.
+     */
+    function fmsCallServer(fnName, args, onSuccess, onFailure) {
+      if (typeof google === 'undefined' || !google.script || !google.script.run) {
+        onFailure({ message: 'Google Apps Script connection not available. Open the web app URL (ending in /exec or /dev) - this page cannot run as a local file.' });
+        return;
+      }
+
+      var runner;
+      try {
+        runner = google.script.run.withSuccessHandler(onSuccess).withFailureHandler(onFailure);
+      } catch (e) {
+        onFailure({ message: 'Could not reach the server: ' + e.message });
+        return;
+      }
+
+      if (typeof runner[fnName] !== 'function') {
+        onFailure({ message: 'Setup incomplete: server function "' + fnName + '()" was not found in this Apps Script project.\n\n' +
+          '1. Confirm Code.gs, WorkflowEngine.gs and TAT_Calculator.gs are all pasted in and SAVED (Ctrl+S).\n' +
+          '2. Delete any leftover starter-kit file.\n' +
+          '3. Run fmsDiagnose() from the editor to see exactly what is missing.\n' +
+          '4. Redeploy: Deploy > Manage deployments > Edit > Version: New version.' });
+        return;
+      }
+
+      try {
+        runner[fnName].apply(runner, args || []);
+      } catch (e) {
+        onFailure({ message: 'Could not start "' + fnName + '()": ' + e.message });
+      }
+    }
+
+    function setLoginBusy(isBusy) {
+      var btn = document.getElementById('loginBtn');
+      var label = document.getElementById('btnLabel');
+      var spinner = document.getElementById('btnSpinner');
+      if (label) label.style.display = isBusy ? 'none' : 'inline';
+      if (spinner) spinner.style.display = isBusy ? 'block' : 'none';
+      if (btn) btn.disabled = isBusy;
+    }
+
     function doLogin() {
       var loginId = document.getElementById('loginId').value.trim();
       var password = document.getElementById('password').value.trim();
       var msg = document.getElementById('msg');
-      var btn = document.getElementById('loginBtn');
-      var label = document.getElementById('btnLabel');
-      var spinner = document.getElementById('btnSpinner');
 
       if (!loginId) { showMsg('Please enter Login ID!', 'error'); return; }
       if (!password) { showMsg('Please enter Password!', 'error'); return; }
 
-      label.style.display = 'none';
-      spinner.style.display = 'block';
-      btn.disabled = true;
+      setLoginBusy(true);
       msg.className = 'msg'; msg.style.display = 'none';
 
-      google.script.run
-        .withSuccessHandler(function(res) {
-          label.style.display = 'inline';
-          spinner.style.display = 'none';
-          btn.disabled = false;
-
-          if (res.success) {
+      fmsCallServer('validateLogin', [loginId, password],
+        function(res) {
+          setLoginBusy(false);
+          if (res && res.success) {
             showMsg(res.message, 'success');
             var session = {
               userName: res.userName,
@@ -185,37 +228,39 @@
             };
             setTimeout(function() { goToDashboard(session); }, 1200);
           } else {
-            showMsg(res.message, 'error');
+            showMsg((res && res.message) ? res.message : 'Login failed.', 'error');
           }
-        })
-        .withFailureHandler(function(err) {
-          label.style.display = 'inline';
-          spinner.style.display = 'none';
-          btn.disabled = false;
-          showMsg('Error: ' + err.message, 'error');
-        })
-        .validateLogin(loginId, password);
+        },
+        function(err) {
+          // ALWAYS restores the button - the spinner can never get stuck now.
+          setLoginBusy(false);
+          showMsg((err && err.message) ? err.message : 'Unknown error', 'error');
+        }
+      );
     }
 
     function showMsg(text, type) {
       var m = document.getElementById('msg');
       m.textContent = text;
       m.className = 'msg ' + type;
+      m.style.display = 'block';
+      m.style.whiteSpace = 'pre-line'; // keeps multi-line setup guidance readable
     }
 
     function goToDashboard(session) {
-      google.script.run
-        .withSuccessHandler(function(html) {
+      fmsCallServer('getDashboardHtml', [],
+        function(html) {
           var sessionScript = '<script>var FMS_SESSION = ' + JSON.stringify(session) + ';<\/script>';
           html = html.replace('</head>', sessionScript + '</head>');
           document.open();
           document.write(html);
           document.close();
-        })
-        .withFailureHandler(function(err) {
-          showMsg('Dashboard load error: ' + err.message, 'error');
-        })
-        .getDashboardHtml();
+        },
+        function(err) {
+          setLoginBusy(false);
+          showMsg('Dashboard load error: ' + ((err && err.message) ? err.message : 'unknown'), 'error');
+        }
+      );
     }
 
     document.addEventListener('keydown', function(e) { if(e.key === 'Enter') doLogin(); });
