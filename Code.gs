@@ -32,6 +32,120 @@ var FMS_DROPDOWN_SHEET = 'DROPDPWN';
 // https://drive.google.com/drive/folders/<THIS_PART_IS_THE_ID>).
 var FMS_DRIVE_FOLDER_ID = '';
 
+// ============================================
+// SERVER-SIDE CACHE (makes "initial load" instant for EVERY user, not
+// just the same browser)
+// ============================================
+// Google Sheets reads are the slow part of every wf* call. Without this,
+// each login/page-open recomputes Home summary / permissions / table data
+// fresh from the Sheet every single time. CacheService stores the last
+// computed result for FMS_CACHE_TTL_SECONDS (10 minutes) so a cache HIT
+// returns instantly - no Sheet read at all - while a scheduled trigger
+// (see fmsScheduledRefresh() below) keeps the Home/permissions cache
+// pre-warmed in the background, so a user logging in normally sees data
+// that is at most ~10 minutes old, INSTANTLY, even on their very first
+// request of the day.
+var FMS_CACHE_TTL_SECONDS = 600; // 10 minutes - matches the client's own auto-refresh interval
+
+function fmsCacheKey(parts) {
+  return 'fms_v1_' + parts.map(function (p) { return String(p); }).join('|');
+}
+
+function fmsCacheGet(key) {
+  try {
+    var raw = CacheService.getScriptCache().get(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null; // cache unavailable/corrupt - caller just computes fresh
+  }
+}
+
+function fmsCacheSet(key, value, ttlSeconds) {
+  try {
+    CacheService.getScriptCache().put(key, JSON.stringify(value), ttlSeconds || FMS_CACHE_TTL_SECONDS);
+  } catch (e) {
+    // Value too large (CacheService caps a single entry at 100KB) or the
+    // cache service is temporarily unavailable - silently skip caching.
+    // Everything still works, just without the instant-cache benefit for
+    // this one oversized payload (e.g. a huge Table View for one header).
+  }
+}
+
+function fmsCacheRemove(key) {
+  try { CacheService.getScriptCache().remove(key); } catch (e) { /* ignore */ }
+}
+
+// ============================================
+// AUTOMATIC BACKGROUND REFRESH (every 10 minutes, even with nobody active)
+// ============================================
+//
+// ONE-TIME SETUP REQUIRED: select "installFmsAutoRefreshTrigger" in the
+// function dropdown above and click Run once. Apps Script triggers can
+// only be created by an authorized run from the editor - this is a
+// platform requirement, not something any code can do fully automatically
+// on its own. After that one click, fmsScheduledRefresh() runs every 10
+// minutes on its own, forever (survives redeployments; only needs to be
+// installed once per script project). fmsDiagnose() reports whether it is
+// currently installed.
+function fmsScheduledRefresh() {
+  try {
+    var ss = SpreadsheetApp.openByUrl(FMS_SHEET_URL);
+    var masterSheet = ss.getSheetByName(FMS_MASTER_SHEET);
+    if (!masterSheet) return;
+    var data = masterSheet.getDataRange().getValues();
+
+    var startTime = Date.now();
+    var BUDGET_MS = 4 * 60 * 1000; // stay well under Apps Script's ~6 min trigger execution limit
+
+    for (var i = 4; i < data.length; i++) {
+      if (Date.now() - startTime > BUDGET_MS) break; // ran out of time this cycle - rest catch up next cycle
+      var login = String(data[i][0]).trim();
+      if (!login || login === 'undefined') continue;
+
+      try {
+        var homeResult = getHomeSummary(FMS_SHEET_URL, FMS_MASTER_SHEET, FMS_STEPS_SHEET, login);
+        if (homeResult && homeResult.success) {
+          fmsCacheSet(fmsCacheKey(['home', login]), homeResult);
+        }
+        var permsResult = getUserPermissionsComputeFresh(login);
+        if (permsResult && permsResult.success) {
+          fmsCacheSet(fmsCacheKey(['perms', login]), permsResult);
+        }
+      } catch (innerErr) {
+        // One user's malformed row should never abort refresh for everyone else.
+        continue;
+      }
+    }
+  } catch (e) {
+    // Never let a trigger failure surface to a user - worst case, the next
+    // login simply computes fresh (exactly like before this feature existed).
+  }
+}
+
+function installFmsAutoRefreshTrigger() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'fmsScheduledRefresh') {
+      return 'Already installed - fmsScheduledRefresh runs every 10 minutes.';
+    }
+  }
+  ScriptApp.newTrigger('fmsScheduledRefresh').timeBased().everyMinutes(10).create();
+  // Warm the cache immediately too, so the benefit starts right now
+  // instead of waiting for the first scheduled run.
+  fmsScheduledRefresh();
+  return 'Installed! fmsScheduledRefresh will now run automatically every 10 minutes, and the cache has been warmed immediately.';
+}
+
+function isFmsAutoRefreshTriggerInstalled() {
+  try {
+    var triggers = ScriptApp.getProjectTriggers();
+    for (var i = 0; i < triggers.length; i++) {
+      if (triggers[i].getHandlerFunction() === 'fmsScheduledRefresh') return true;
+    }
+  } catch (e) { /* ignore */ }
+  return false;
+}
+
 function doGet() {
   // FMS_DOGET_MARKER - do not remove. fmsDiagnose() looks for this string
   // to confirm THIS doGet() is the one Apps Script is actually serving.
@@ -130,6 +244,22 @@ function fmsDiagnose() {
     lines.push('PROBLEM  Cannot open the Spreadsheet: ' + e.message);
   }
 
+  // 6) Is the 10-minute background refresh trigger installed? Without it,
+  // caching still makes repeat loads instant, but the "10-minute-old data
+  // even on a NEW user's very first login" guarantee needs this trigger.
+  try {
+    if (isFmsAutoRefreshTriggerInstalled()) {
+      lines.push('OK       10-minute auto-refresh trigger is installed');
+    } else {
+      lines.push('PROBLEM  10-minute auto-refresh trigger is NOT installed.');
+      lines.push('         Run installFmsAutoRefreshTrigger() once from this editor');
+      lines.push('         (select it in the function dropdown above and click Run).');
+      lines.push('         One-time setup only - it then runs forever on its own.');
+    }
+  } catch (e) {
+    lines.push('PROBLEM  Could not check triggers: ' + e.message);
+  }
+
   var report = lines.join('\n');
   Logger.log(report);
   return report;
@@ -196,7 +326,22 @@ function validateLogin(loginId, password) {
 // ============================================
 // GET PERMISSIONS FOR LOGGED IN USER
 // ============================================
+// Cache-first: a HIT returns instantly with no Sheet read at all. The
+// background trigger (fmsScheduledRefresh) keeps this warm every 10
+// minutes; a cache MISS (e.g. right after a deployment, or the trigger
+// hasn't run yet) computes fresh AND populates the cache for next time,
+// so the very next call - by this user or any other - is instant too.
 function getUserPermissions(userName) {
+  var cacheKey = fmsCacheKey(['perms', userName]);
+  var cached = fmsCacheGet(cacheKey);
+  if (cached) return cached;
+
+  var fresh = getUserPermissionsComputeFresh(userName);
+  if (fresh && fresh.success) fmsCacheSet(cacheKey, fresh);
+  return fresh;
+}
+
+function getUserPermissionsComputeFresh(userName) {
   try {
     var ss = SpreadsheetApp.openByUrl(FMS_SHEET_URL);
     var sheet = ss.getSheetByName(FMS_STEPS_SHEET);

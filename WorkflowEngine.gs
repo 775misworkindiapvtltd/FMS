@@ -342,7 +342,22 @@ function getStepCounts(masterSheetUrl, masterSheetName, stepsSheetName, header, 
  * has permission for (same source as getUserPermissions), returns the
  * Pending/Completed counts, plus grand totals across everything.
  */
+// Cache-first, same pattern as getUserPermissions() in Code.gs: a HIT
+// returns instantly with zero Sheet reads. This is the single most
+// expensive call in the whole app (loops getStepCounts() across every
+// step the user owns), so it benefits the most from caching - this is
+// the main fix for "initial data loading takes too long".
 function getHomeSummary(masterSheetUrl, masterSheetName, stepsSheetName, userName) {
+  var cacheKey = fmsCacheKey(['home', userName]);
+  var cached = fmsCacheGet(cacheKey);
+  if (cached) return cached;
+
+  var fresh = getHomeSummaryComputeFresh(masterSheetUrl, masterSheetName, stepsSheetName, userName);
+  if (fresh && fresh.success) fmsCacheSet(cacheKey, fresh);
+  return fresh;
+}
+
+function getHomeSummaryComputeFresh(masterSheetUrl, masterSheetName, stepsSheetName, userName) {
   try {
     var permsRes = getUserPermissionsInternal(masterSheetUrl, stepsSheetName, userName);
     if (!permsRes.success) return { success: false, message: permsRes.message, groups: [] };
@@ -792,6 +807,15 @@ function submitStepData(masterSheetUrl, masterSheetName, stepsSheetName, header,
           sheet.getRange(rowNumber, nextPA.plannedCol).setValue(plannedDate);
         }
       }
+    }
+
+    // Invalidate this user's cached Home summary so their OWN dashboard
+    // reflects this submission right away rather than waiting up to 10
+    // minutes for the next scheduled refresh. (The client's own optimistic
+    // UI update already makes the table feel instant; this keeps the
+    // server-side cache from serving stale counts on the next page load.)
+    if (typeof fmsCacheRemove === 'function') {
+      fmsCacheRemove(fmsCacheKey(['home', submittedByUser]));
     }
 
     return { success: true, message: 'Saved successfully!' };
