@@ -11,7 +11,8 @@
 // Scripts.html     - Shared JS scripts (included via include())
 // ThemeEngine.html - Appearance & Dynamic Color Scheme system (FOUC-safe,
 //                    included FIRST in <head> on both Login + Dashboard)
-// TAT_Calculator.gs - TAT calculation functions
+// TAT_Calculator.gs - Optional standalone/manual TAT utilities. Production
+//                     workflow TAT is self-contained in WorkflowEngine.gs.
 // WorkflowEngine.gs - Pending list / popup form / step submission logic
 //
 // ============================================
@@ -50,7 +51,7 @@ var FMS_CACHE_TTL_SECONDS = 600; // 10 minutes - matches the client's own auto-r
 // Human-readable deployment fingerprint. It is shown on the login page and
 // by fmsDiagnose(), making it immediately obvious when an old /exec version
 // or a different Apps Script project is being opened.
-var FMS_BUILD_ID = '2026-07-22-runtime-safe-1';
+var FMS_BUILD_ID = '2026-07-22-runtime-safe-2';
 
 function fmsCacheKey(parts) {
   return 'fms_v1_' + parts.map(function (p) { return String(p); }).join('|');
@@ -165,7 +166,7 @@ function fmsGetRuntimeInfo() {
     'getUserPermissions': typeof getUserPermissions,
     'getDashboardHtml': typeof getDashboardHtml,
     'include': typeof include,
-    'calculateTAT': typeof calculateTAT,
+    'wfCalculateTAT': typeof wfCalculateTAT,
     'formatDateSafe': typeof formatDateSafe,
     'wfGetHomeSummary': typeof wfGetHomeSummary,
     'wfGetStepTableData': typeof wfGetStepTableData,
@@ -331,7 +332,7 @@ function fmsDiagnose() {
     'getUserPermissions': typeof getUserPermissions,
     'getDashboardHtml': typeof getDashboardHtml,
     'include': typeof include,
-    'calculateTAT': typeof calculateTAT,
+    'wfCalculateTAT': typeof wfCalculateTAT,
     'formatDateSafe': typeof formatDateSafe,
     'wfGetHomeSummary': typeof wfGetHomeSummary,
     'wfGetStepTableData': typeof wfGetStepTableData,
@@ -343,8 +344,8 @@ function fmsDiagnose() {
     if (fns[name] === 'function') {
       lines.push('OK       ' + name + '()');
     } else {
-      lines.push('PROBLEM  ' + name + '() missing - paste the .gs file that defines it');
-      lines.push('         (Code.gs / WorkflowEngine.gs / TAT_Calculator.gs).');
+      lines.push('PROBLEM  ' + name + '() missing - replace and save the latest server files');
+      lines.push('         (Code.gs and WorkflowEngine.gs).');
     }
   }
 

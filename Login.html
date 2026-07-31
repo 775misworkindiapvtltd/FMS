@@ -203,7 +203,7 @@
       if (typeof runner[fnName] !== 'function') {
         fail({ message: 'Deployment mismatch: server function "' + fnName + '()" is not in the Apps Script version behind this URL.\n\n' +
           '1. Open the SAME Apps Script project used by this /exec URL.\n' +
-          '2. Replace and SAVE Code.gs, WorkflowEngine.gs and TAT_Calculator.gs.\n' +
+          '2. Replace and SAVE Code.gs and WorkflowEngine.gs (TAT_Calculator.gs is optional).\n' +
           '3. Delete any leftover starter-kit Code/Index/Main file.\n' +
           '4. Run fmsDiagnose(); open the WEB APP URL printed in its log.\n' +
           '5. Deploy > Manage deployments > Edit > Version: New version.\n\n' +

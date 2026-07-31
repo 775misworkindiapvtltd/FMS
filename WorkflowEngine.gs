@@ -729,6 +729,126 @@ function getDropdownOptions(masterSheetUrl, dropdownSheetName, fieldName) {
 }
 
 // ============================================
+// SELF-CONTAINED WORKFLOW TAT CALCULATOR
+// ============================================
+// Production must not depend on TAT_Calculator.gs being copied/deployed.
+// These workflow-prefixed helpers deliberately have unique names, so the
+// optional standalone calculator file may be present or absent without
+// changing login, table loading, forms, or step submission.
+function wfCalculateTAT(submissionDateTime, tatHours, officeStartTime, officeEndTime, weekOffDays, holidaySheetName, sheetUrl) {
+  var submission = submissionDateTime instanceof Date
+    ? new Date(submissionDateTime.getTime())
+    : new Date(submissionDateTime);
+  if (isNaN(submission.getTime())) throw new Error('Invalid TAT submission date.');
+
+  var officeStart = wfParseOfficeTime_(officeStartTime);
+  var officeEnd = wfParseOfficeTime_(officeEndTime);
+  var startMinutes = officeStart.hours * 60 + officeStart.minutes;
+  var endMinutes = officeEnd.hours * 60 + officeEnd.minutes;
+  if (endMinutes <= startMinutes) throw new Error('Office end time must be after office start time.');
+
+  var remaining = Number(tatHours) * 60;
+  if (!isFinite(remaining) || remaining < 0) throw new Error('TAT hours must be a non-negative number.');
+
+  var offDays = (weekOffDays || []).map(function (day) { return Number(day); });
+  var holidays = wfGetHolidayKeys_(holidaySheetName, sheetUrl);
+  var current = new Date(submission.getTime());
+  current.setMilliseconds(0);
+
+  if (!wfIsWorkingDay_(current, offDays, holidays)) {
+    current = wfNextWorkingDayStart_(current, officeStart, offDays, holidays);
+  } else {
+    var submittedMinutes = current.getHours() * 60 + current.getMinutes();
+    if (submittedMinutes >= endMinutes) {
+      current = wfNextWorkingDayStart_(current, officeStart, offDays, holidays);
+    } else if (submittedMinutes < startMinutes) {
+      current.setHours(officeStart.hours, officeStart.minutes, 0, 0);
+    }
+  }
+
+  var guard = 0;
+  while (remaining > 0) {
+    guard++;
+    if (guard > 10000) throw new Error('TAT calculation exceeded its safety limit. Check office days and times.');
+
+    if (!wfIsWorkingDay_(current, offDays, holidays)) {
+      current = wfNextWorkingDayStart_(current, officeStart, offDays, holidays);
+    }
+
+    var currentMinutes = current.getHours() * 60 + current.getMinutes();
+    if (currentMinutes < startMinutes) {
+      current.setHours(officeStart.hours, officeStart.minutes, 0, 0);
+      currentMinutes = startMinutes;
+    }
+
+    var availableToday = endMinutes - currentMinutes;
+    if (availableToday <= 0) {
+      current = wfNextWorkingDayStart_(current, officeStart, offDays, holidays);
+    } else if (remaining <= availableToday) {
+      current.setMinutes(current.getMinutes() + remaining);
+      remaining = 0;
+    } else {
+      remaining -= availableToday;
+      current = wfNextWorkingDayStart_(current, officeStart, offDays, holidays);
+    }
+  }
+
+  return current;
+}
+
+function wfParseOfficeTime_(timeText) {
+  var match = /^(\d{1,2}):(\d{2})$/.exec(String(timeText || '').trim());
+  if (!match) throw new Error('Invalid office time: ' + timeText);
+  var hours = Number(match[1]);
+  var minutes = Number(match[2]);
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+    throw new Error('Invalid office time: ' + timeText);
+  }
+  return { hours: hours, minutes: minutes };
+}
+
+function wfDateKey_(date) {
+  return date.getFullYear() + '-' + ('0' + (date.getMonth() + 1)).slice(-2) + '-' + ('0' + date.getDate()).slice(-2);
+}
+
+function wfGetHolidayKeys_(holidaySheetName, sheetUrl) {
+  var keys = [];
+  if (!holidaySheetName || !sheetUrl) return keys;
+
+  try {
+    var ss = SpreadsheetApp.openByUrl(sheetUrl);
+    var sheet = ss.getSheetByName(holidaySheetName);
+    if (!sheet) return keys;
+    var values = sheet.getDataRange().getValues();
+    for (var i = 1; i < values.length; i++) {
+      if (!values[i][0]) continue;
+      var holiday = values[i][0] instanceof Date ? values[i][0] : new Date(values[i][0]);
+      if (!isNaN(holiday.getTime())) keys.push(wfDateKey_(holiday));
+    }
+  } catch (e) {
+    // Holiday configuration is optional. A missing/inaccessible holiday tab
+    // must never block completion of an otherwise valid workflow step.
+  }
+  return keys;
+}
+
+function wfIsWorkingDay_(date, weekOffDays, holidayKeys) {
+  return weekOffDays.indexOf(date.getDay()) === -1 && holidayKeys.indexOf(wfDateKey_(date)) === -1;
+}
+
+function wfNextWorkingDayStart_(currentDate, officeStart, weekOffDays, holidayKeys) {
+  var next = new Date(currentDate.getTime());
+  next.setDate(next.getDate() + 1);
+  next.setHours(officeStart.hours, officeStart.minutes, 0, 0);
+
+  for (var i = 0; i < 3660; i++) {
+    if (wfIsWorkingDay_(next, weekOffDays, holidayKeys)) return next;
+    next.setDate(next.getDate() + 1);
+  }
+  throw new Error('No working day found. Check week-off and holiday configuration.');
+}
+
+// ============================================
 // SUBMIT STEP DATA
 // ============================================
 
@@ -804,7 +924,7 @@ function submitStepData(masterSheetUrl, masterSheetName, stepsSheetName, header,
         var nextFields = getStepFields(sheet, nextRange);
         var nextPA = getPlannedActualCols(nextFields);
         if (nextPA.plannedCol) {
-          var plannedDate = calculateTAT(
+          var plannedDate = wfCalculateTAT(
             now,
             WF_DEFAULT_TAT_HOURS,
             WF_DEFAULT_OFFICE_START,

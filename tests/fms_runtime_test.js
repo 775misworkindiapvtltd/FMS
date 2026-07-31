@@ -7,7 +7,9 @@ const vm = require('vm');
 
 const ROOT = path.resolve(__dirname, '..');
 const read = (name) => fs.readFileSync(path.join(ROOT, name), 'utf8');
-const serverFiles = ['Code.gs', 'TAT_Calculator.gs', 'WorkflowEngine.gs'];
+const serverFiles = ['Code.gs', 'WorkflowEngine.gs'];
+const optionalServerFiles = ['TAT_Calculator.gs'];
+const allServerFiles = serverFiles.concat(optionalServerFiles);
 const htmlFiles = ['Login.html', 'Dashboard.html', 'Scripts.html', 'Styles.html', 'ThemeEngine.html'];
 const htmlSource = Object.fromEntries(htmlFiles.map((name) => [name, read(name)]));
 
@@ -255,8 +257,13 @@ const clientContext = vm.createContext({
 const scriptsBody = htmlSource['Scripts.html'].match(/^<script>([\s\S]*)<\/script>\s*$/i)[1];
 new vm.Script(scriptsBody, { filename: 'Scripts.html' }).runInContext(clientContext);
 
-test('all Apps Script server files parse and load together', () => {
-  serverFiles.forEach((name) => assert.ok(read(name).length > 0));
+test('all Apps Script server files parse; production loads without optional TAT_Calculator.gs', () => {
+  allServerFiles.forEach((name) => {
+    assert.ok(read(name).length > 0);
+    new vm.Script(read(name), { filename: name + ':parse-only' });
+  });
+  assert.strictEqual(typeof context.calculateTAT, 'undefined');
+  assert.strictEqual(typeof context.wfCalculateTAT, 'function');
 });
 
 test('all inline HTML JavaScript blocks parse', () => {
@@ -280,7 +287,7 @@ test('Styles.html has balanced braces', () => {
 
 test('server global function declarations are unique', () => {
   const seen = new Map();
-  serverFiles.forEach((name) => {
+  allServerFiles.forEach((name) => {
     const matches = read(name).matchAll(/^function\s+([A-Za-z_$][\w$]*)\s*\(/gm);
     for (const match of matches) {
       assert.ok(!seen.has(match[1]), 'duplicate function ' + match[1] + ' in ' + seen.get(match[1]) + ' and ' + name);
@@ -294,14 +301,22 @@ test('deployment contract reports a complete runtime', () => {
   const info = context.fmsGetRuntimeInfo();
   assert.strictEqual(info.success, true);
   assert.deepStrictEqual(Array.from(info.missing), []);
-  assert.strictEqual(info.buildId, '2026-07-22-runtime-safe-1');
+  assert.strictEqual(info.buildId, '2026-07-22-runtime-safe-2');
+});
+
+test('deployment contract is ready when calculateTAT and TAT_Calculator.gs are absent', () => {
+  assert.strictEqual(typeof context.calculateTAT, 'undefined');
+  const info = context.fmsGetRuntimeInfo();
+  assert.strictEqual(info.success, true);
+  assert.ok(!Array.from(info.missing).some((item) => item.indexOf('calculateTAT') !== -1));
+  assert.match(context.doGet({ parameter: { fms_check: '1' } }).getContent(), /FMS deployment is ready/);
 });
 
 test('doGet renders FMS Login and explicit deployment status', () => {
   const login = context.doGet({ parameter: {} });
   assert.strictEqual(login.title, 'FMS - Flow Management System');
   assert.match(login.getContent(), /Flow Management System/);
-  assert.match(login.getContent(), /Build 2026-07-22-runtime-safe-1/);
+  assert.match(login.getContent(), /Build 2026-07-22-runtime-safe-2/);
   const status = context.doGet({ parameter: { fms_check: '1' } });
   assert.match(status.getContent(), /FMS deployment is ready/);
 });
@@ -397,7 +412,29 @@ test('table and form date rendering works with formatResult removed', () => {
   context.formatResult = original;
 });
 
-test('edit/submit writes fields, Actual and next Planned, then invalidates Home cache', () => {
+test('self-contained workflow TAT matches office-hours, week-off and holiday rules', () => {
+  const sameDay = context.wfCalculateTAT(
+    new Date(2025, 0, 20, 16, 0), 2, '10:00', '18:30', [0], '', ''
+  );
+  assert.strictEqual(context.formatDateSafe(sameDay), '20 Jan 25 18:00:00');
+
+  const carryNextDay = context.wfCalculateTAT(
+    new Date(2025, 0, 20, 17, 30), 2, '10:00', '18:30', [0], '', ''
+  );
+  assert.strictEqual(context.formatDateSafe(carryNextDay), '21 Jan 25 11:00:00');
+
+  const skipWeekend = context.wfCalculateTAT(
+    new Date(2025, 0, 25, 15, 0), 2, '10:00', '18:30', [0, 6], '', ''
+  );
+  assert.strictEqual(context.formatDateSafe(skipWeekend), '27 Jan 25 12:00:00');
+
+  assert.throws(
+    () => context.wfCalculateTAT(new Date(), 2, '18:30', '10:00', [0], '', ''),
+    /Office end time must be after office start time/
+  );
+});
+
+test('edit/submit writes fields, Actual and next Planned without calculateTAT global', () => {
   const homeKey = context.fmsCacheKey(['home', 'USER1']);
   cache.set(homeKey, JSON.stringify({ success: true, stale: true }));
   const result = context.wfSubmitStep(
