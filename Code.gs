@@ -33,11 +33,106 @@ var FMS_DROPDOWN_SHEET = 'DROPDPWN';
 var FMS_DRIVE_FOLDER_ID = '';
 
 function doGet() {
+  // FMS_DOGET_MARKER - do not remove. fmsDiagnose() looks for this string
+  // to confirm THIS doGet() is the one Apps Script is actually serving.
   return HtmlService.createTemplateFromFile('Login')
     .evaluate()
     .setTitle('FMS - Flow Management System')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+/**
+ * ============================================
+ * SETUP CHECKER - run this from the Apps Script editor
+ * ============================================
+ * Select "fmsDiagnose" in the function dropdown and click Run. The
+ * Execution log prints exactly what is wrong.
+ *
+ * Why this exists: if a leftover starter-kit / template file also defines
+ * doGet(), Apps Script keeps only the LAST definition it loads, so the web
+ * app can silently keep serving the starter page even after every FMS file
+ * has been pasted in correctly. That failure is invisible from the editor,
+ * so this check reports it directly instead of leaving you guessing.
+ */
+function fmsDiagnose() {
+  var lines = [];
+  lines.push('===== FMS SETUP CHECK =====');
+
+  // 1) Is the doGet() being served actually FMS's one?
+  try {
+    var activeSource = doGet.toString();
+    if (activeSource.indexOf('FMS_DOGET_MARKER') !== -1) {
+      lines.push('OK       doGet() -> FMS Login page');
+    } else {
+      lines.push('PROBLEM  doGet() is NOT FMS\'s version.');
+      lines.push('         Another file in this project also defines doGet()');
+      lines.push('         (usually the starter kit\'s Code/Index/Main file) and it');
+      lines.push('         is overriding FMS. Delete that file, or remove its');
+      lines.push('         doGet() function, then run this check again.');
+    }
+  } catch (e) {
+    lines.push('PROBLEM  doGet() not found at all: ' + e.message);
+  }
+
+  // 2) Do all required HTML files exist, under the exact expected names?
+  var required = ['Login', 'Dashboard', 'Scripts', 'Styles', 'ThemeEngine'];
+  for (var i = 0; i < required.length; i++) {
+    try {
+      HtmlService.createHtmlOutputFromFile(required[i]);
+      lines.push('OK       ' + required[i] + '.html found');
+    } catch (e) {
+      lines.push('PROBLEM  ' + required[i] + '.html is MISSING or misnamed.');
+      lines.push('         Create an HTML file named exactly "' + required[i] + '"');
+      lines.push('         (type the name WITHOUT ".html" - Apps Script adds it).');
+    }
+  }
+
+  // 3) Leftover starter-kit files that commonly hijack doGet()
+  var leftovers = ['Index', 'index', 'Main', 'Server'];
+  for (var j = 0; j < leftovers.length; j++) {
+    try {
+      HtmlService.createHtmlOutputFromFile(leftovers[j]);
+      lines.push('PROBLEM  Leftover starter file "' + leftovers[j] + '.html" still exists.');
+      lines.push('         Delete it - FMS never uses it.');
+    } catch (e) { /* not present = good */ }
+  }
+
+  // 4) Are the required server-side functions present?
+  var fns = {
+    'validateLogin': typeof validateLogin,
+    'getUserPermissions': typeof getUserPermissions,
+    'getDashboardHtml': typeof getDashboardHtml,
+    'include': typeof include,
+    'wfGetHomeSummary': typeof wfGetHomeSummary,
+    'wfGetStepTableData': typeof wfGetStepTableData,
+    'wfGetMultiStepTableData': typeof wfGetMultiStepTableData,
+    'wfSubmitStep': typeof wfSubmitStep
+  };
+  for (var name in fns) {
+    if (fns[name] === 'function') {
+      lines.push('OK       ' + name + '()');
+    } else {
+      lines.push('PROBLEM  ' + name + '() missing - paste the .gs file that defines it');
+      lines.push('         (Code.gs / WorkflowEngine.gs / TAT_Calculator.gs).');
+    }
+  }
+
+  // 5) Can the configured Spreadsheet actually be opened?
+  try {
+    var ss = SpreadsheetApp.openByUrl(FMS_SHEET_URL);
+    lines.push('OK       Spreadsheet opened: ' + ss.getName());
+    var needed = [FMS_MASTER_SHEET, FMS_STEPS_SHEET];
+    for (var k = 0; k < needed.length; k++) {
+      lines.push((ss.getSheetByName(needed[k]) ? 'OK       tab "' : 'PROBLEM  missing tab "') + needed[k] + '"');
+    }
+  } catch (e) {
+    lines.push('PROBLEM  Cannot open the Spreadsheet: ' + e.message);
+  }
+
+  var report = lines.join('\n');
+  Logger.log(report);
+  return report;
 }
 
 /**
