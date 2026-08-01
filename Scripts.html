@@ -3,6 +3,8 @@
 // FMS - GLOBAL SCRIPTS (Shared across pages)
 // ============================================
 
+var FMS_CLIENT_BUILD_ID = '2026-07-22-column-width-2';
+
 var FMS = {
   sidebarOpen: true,
   currentTheme: 'dark',
@@ -315,6 +317,7 @@ function silentRefreshCurrentView() {
     google.script.run
       .withSuccessHandler(function(res) {
         if (res.success) {
+          var schemasChanged = cacheFormSchemasFromTable(multiHeader, null, res);
           var newStr = JSON.stringify(res.rows) + JSON.stringify(res.columns);
           var cachedMulti = FMS.multiTableCache[multiHeader];
           var oldStr = cachedMulti ? (JSON.stringify(cachedMulti.rows) + JSON.stringify(cachedMulti.columns)) : null;
@@ -326,6 +329,7 @@ function silentRefreshCurrentView() {
             }
             anyChanged = true;
           }
+          if (schemasChanged) anyChanged = true;
         }
         done();
       })
@@ -342,6 +346,7 @@ function silentRefreshCurrentView() {
     google.script.run
       .withSuccessHandler(function(res) {
         if (res.success) {
+          var schemaChanged = cacheFormSchemasFromTable(refreshHeader, refreshStep, res);
           var newStr = JSON.stringify(res.rows) + JSON.stringify(res.columns);
           var cached = FMS.tableCache[cacheKey];
           var oldStr = cached ? (JSON.stringify(cached.rows) + JSON.stringify(cached.columns)) : null;
@@ -350,6 +355,7 @@ function silentRefreshCurrentView() {
               columns: res.columns,
               columnTypes: res.columnTypes || [],
               defaultHiddenCols: res.defaultHiddenCols || [],
+              baseColCount: res.baseColCount || 0,
               rows: res.rows,
               fetchedAt: new Date()
             };
@@ -371,6 +377,7 @@ function silentRefreshCurrentView() {
             }
             anyChanged = true;
           }
+          if (schemaChanged) anyChanged = true;
         }
         done();
       })
@@ -610,6 +617,8 @@ function goHome() {
 
 var HOME_SUMMARY_STORAGE_KEY = 'fms_home_summary_cache';
 var PERMISSIONS_STORAGE_KEY = 'fms_permissions_cache';
+var FORM_SCHEMA_STORAGE_KEY = 'fms_form_schema_cache_v2';
+var FORM_SCHEMA_CACHE_MS = 30 * 60 * 1000; // fast reopen, refreshed silently every 30 minutes
 
 /**
  * Persists the Home summary + sidebar permissions to localStorage so that
@@ -638,6 +647,9 @@ function persistHomeSummaryCache() {
 function persistPermissionsCache() {
   if (FMS.permissionsCache) fmsStoreSet(scopedStorageKey(PERMISSIONS_STORAGE_KEY), JSON.stringify(FMS.permissionsCache));
 }
+function persistFormStructureCache() {
+  if (FMS.formStructureCache) fmsStoreSet(scopedStorageKey(FORM_SCHEMA_STORAGE_KEY), JSON.stringify(FMS.formStructureCache));
+}
 function restorePersistedCaches() {
   try {
     var home = fmsStoreGet(scopedStorageKey(HOME_SUMMARY_STORAGE_KEY));
@@ -646,6 +658,13 @@ function restorePersistedCaches() {
   try {
     var perms = fmsStoreGet(scopedStorageKey(PERMISSIONS_STORAGE_KEY));
     if (perms) FMS.permissionsCache = JSON.parse(perms);
+  } catch (e) { /* ignore corrupt cache */ }
+  try {
+    var schemas = fmsStoreGet(scopedStorageKey(FORM_SCHEMA_STORAGE_KEY));
+    if (schemas) {
+      var parsedSchemas = JSON.parse(schemas);
+      if (parsedSchemas && typeof parsedSchemas === 'object') FMS.formStructureCache = parsedSchemas;
+    }
   } catch (e) { /* ignore corrupt cache */ }
 }
 
@@ -964,6 +983,7 @@ function loadMultiStepTable(headerName) {
     main.innerHTML = pageShell;
     applyMultiTableData(cached);
     renderMultiStepTable(headerName);
+    warmFormsFromMultiTable(headerName, cached);
     fetchMultiStepTableInBackground(headerName, false);
   } else {
     main.innerHTML = pageShell;
@@ -997,6 +1017,8 @@ function fetchMultiStepTableInBackground(headerName, showErrorsInline) {
         return;
       }
       FMS.multiTableCache[headerName] = res;
+      cacheFormSchemasFromTable(headerName, null, res);
+      warmFormsFromMultiTable(headerName, res);
       // Only touch the DOM if the user is still on this header in Table View
       if (FMS.viewMode === 'table' && FMS.currentHeader === headerName) {
         applyMultiTableData(res);
@@ -1064,7 +1086,7 @@ function compactStepsColumnWidth() {
   // 20px numeric chips + 3px gaps + compact cell padding. Width grows only
   // enough to keep every owned step on one line, avoiding tall wrapped rows.
   var count = Math.max(1, (FMS.table.steps || []).length);
-  return Math.max(64, Math.min(320, 12 + (count * 20) + (Math.max(0, count - 1) * 3)));
+  return Math.max(64, 12 + (count * 20) + (Math.max(0, count - 1) * 3));
 }
 
 function defaultColumnWidth(key) {
@@ -1075,7 +1097,10 @@ function defaultColumnWidth(key) {
 
 function columnWidthBounds(key) {
   if (key === '__serial') return { min: 40, max: 160 };
-  if (key === '__action') return { min: FMS.viewMode === 'table' ? compactStepsColumnWidth() : 72, max: 420 };
+  if (key === '__action') return {
+    min: FMS.viewMode === 'table' ? compactStepsColumnWidth() : 72,
+    max: Math.max(800, FMS.viewMode === 'table' ? compactStepsColumnWidth() : 800)
+  };
   return { min: 56, max: 600 };
 }
 
@@ -1207,7 +1232,7 @@ function renderMultiStepTable(headerName) {
   // ---- Column name row (identical behaviour to Step View) ----
   html += '<tr>';
   html += '<th class="col-serial" data-col="__serial">S.No' +
-    '<span class="col-resize-handle" onmousedown="startColResize(event,\'__serial\')" ontouchstart="startColResize(event,\'__serial\')"></span></th>';
+    columnResizeHandleHtml('__serial', false, 'S.No') + '</th>';
   visibleIdx.forEach(function(idx) {
     var arrow = t.sortCol === idx ? (t.sortDir === 'asc' ? ' ▲' : ' ▼') : '';
     var w = getConfiguredColumnWidth(t, idx);
@@ -1225,11 +1250,11 @@ function renderMultiStepTable(headerName) {
       '<button type="button" class="col-filter-btn' + (activeFilter ? ' active' : '') + '" onclick="' + filterAction + '" title="Filter this column">' +
       '<span class="material-icons-round">' + filterIcon + '</span></button>' +
       '</div>' +
-      '<span class="col-resize-handle" onmousedown="startColResize(event,' + idx + ')" ontouchstart="startColResize(event,' + idx + ')"></span>' +
+      columnResizeHandleHtml(idx, false, t.columns[idx]) +
       '</th>';
   });
   html += '<th class="col-action" data-col="__action">Steps' +
-    '<span class="col-resize-handle col-resize-handle-left" onmousedown="startColResize(event,\'__action\')" ontouchstart="startColResize(event,\'__action\')"></span></th>';
+    columnResizeHandleHtml('__action', true, 'Steps') + '</th>';
   html += '</tr></thead><tbody>';
 
   if (pageRows.length === 0) {
@@ -1320,6 +1345,8 @@ function loadStepTable(headerName, stepName) {
     FMS.table.rows = cached.rows;
     applyDefaultHiddenCols(cached.defaultHiddenCols);
     renderDataTable(headerName, stepName);
+    var cachedPendingFormRow = (cached.rows || []).filter(function(row) { return row.status === 'pending'; })[0];
+    if (cachedPendingFormRow) warmStepFormCache(headerName, stepName, cachedPendingFormRow.row);
     fetchStepTableInBackground(headerName, stepName, cacheKey, false);
   } else {
     // First time opening this step - show loader once
@@ -1339,7 +1366,17 @@ function fetchStepTableInBackground(headerName, stepName, cacheKey, showErrorsIn
         }
         return;
       }
-      FMS.tableCache[cacheKey] = { columns: res.columns, columnTypes: res.columnTypes || [], defaultHiddenCols: res.defaultHiddenCols || [], rows: res.rows, fetchedAt: new Date() };
+      FMS.tableCache[cacheKey] = {
+        columns: res.columns,
+        columnTypes: res.columnTypes || [],
+        defaultHiddenCols: res.defaultHiddenCols || [],
+        baseColCount: res.baseColCount || 0,
+        rows: res.rows,
+        fetchedAt: new Date()
+      };
+      cacheFormSchemasFromTable(headerName, stepName, res);
+      var firstPendingFormRow = (res.rows || []).filter(function(row) { return row.status === 'pending'; })[0];
+      if (firstPendingFormRow) warmStepFormCache(headerName, stepName, firstPendingFormRow.row);
       // Only update the visible table if the user is still viewing this exact step
       if (FMS.currentHeader === headerName && FMS.currentStep === stepName) {
         FMS.table.columns = res.columns;
@@ -1465,18 +1502,34 @@ function getFilteredSortedRows() {
 
 // Detects a bare http(s) URL and renders it as a short "Click Here" link
 // instead of dumping the raw URL into the cell (per user request).
-var URL_PATTERN = /^https?:\/\/\S+$/i;
+var URL_PATTERN = /^https?:\/\/[^\s<>"']+$/i;
+
+function safeHttpUrl(rawValue) {
+  var value = String(rawValue == null ? '' : rawValue).trim();
+  if (!URL_PATTERN.test(value)) return null;
+  try {
+    if (typeof URL === 'function') {
+      var parsed = new URL(value);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    }
+  } catch (e) {
+    return null;
+  }
+  return value;
+}
 
 function renderCellValue(rawValue) {
   var value = String(rawValue == null ? '' : rawValue).trim();
-  if (URL_PATTERN.test(value)) {
-    return '<a href="' + escapeAttr(value) + '" target="_blank" rel="noopener noreferrer" class="cell-link" onclick="event.stopPropagation()">Click Here</a>';
+  var safeUrl = safeHttpUrl(value);
+  if (safeUrl) {
+    return '<a href="' + escapeHtmlAttr(safeUrl) + '" target="_blank" rel="noopener noreferrer" class="cell-link" onclick="event.stopPropagation()">Click Here</a>';
   }
-  // Also handle cells with MULTIPLE comma/space separated URLs (e.g. multi-file uploads)
+  // Also handle cells with MULTIPLE comma separated URLs (e.g. multi-file uploads)
   var parts = value.split(/,\s*/);
-  if (parts.length > 1 && parts.every(function(p) { return URL_PATTERN.test(p.trim()); })) {
-    return parts.map(function(p, i) {
-      return '<a href="' + escapeAttr(p.trim()) + '" target="_blank" rel="noopener noreferrer" class="cell-link" onclick="event.stopPropagation()">Click Here' + (parts.length > 1 ? ' ' + (i + 1) : '') + '</a>';
+  var safeParts = parts.map(function(part) { return safeHttpUrl(part); });
+  if (parts.length > 1 && safeParts.every(function(part) { return !!part; })) {
+    return safeParts.map(function(part, i) {
+      return '<a href="' + escapeHtmlAttr(part) + '" target="_blank" rel="noopener noreferrer" class="cell-link" onclick="event.stopPropagation()">Click Here' + (parts.length > 1 ? ' ' + (i + 1) : '') + '</a>';
     }).join(', ');
   }
   return escapeHtml(value);
@@ -1528,7 +1581,7 @@ function renderDataTable(headerName, stepName) {
   html += '<thead>';
   html += '<tr>';
   html += '<th class="col-serial" data-col="__serial">S.No' +
-    '<span class="col-resize-handle" onmousedown="startColResize(event,\'__serial\')" ontouchstart="startColResize(event,\'__serial\')"></span></th>';
+    columnResizeHandleHtml('__serial', false, 'S.No') + '</th>';
   visibleIdx.forEach(function(idx) {
     var arrow = t.sortCol === idx ? (t.sortDir === 'asc' ? ' ▲' : ' ▼') : '';
     var w = getConfiguredColumnWidth(t, idx);
@@ -1546,11 +1599,11 @@ function renderDataTable(headerName, stepName) {
       '<button type="button" class="col-filter-btn' + (activeFilter ? ' active' : '') + '" onclick="' + filterAction + '" title="Filter this column">' +
       '<span class="material-icons-round">' + filterIcon + '</span></button>' +
       '</div>' +
-      '<span class="col-resize-handle" onmousedown="startColResize(event,' + idx + ')" ontouchstart="startColResize(event,' + idx + ')"></span>' +
+      columnResizeHandleHtml(idx, false, t.columns[idx]) +
       '</th>';
   });
   html += '<th class="col-action" data-col="__action">Action' +
-    '<span class="col-resize-handle col-resize-handle-left" onmousedown="startColResize(event,\'__action\')" ontouchstart="startColResize(event,\'__action\')"></span></th>';
+    columnResizeHandleHtml('__action', true, 'Action') + '</th>';
   html += '</tr></thead><tbody>';
 
   if (pageRows.length === 0) {
@@ -1599,6 +1652,19 @@ function columnWidthKeyArg(key) {
   return typeof key === 'number' ? String(key) : '\'' + key + '\'';
 }
 
+function columnResizeHandleHtml(key, isLeft, label) {
+  var arg = columnWidthKeyArg(key);
+  var safeLabel = escapeHtmlAttr(String(label || 'column'));
+  return '<span class="col-resize-handle' + (isLeft ? ' col-resize-handle-left' : '') + '" ' +
+    'role="separator" aria-orientation="vertical" tabindex="0" ' +
+    'aria-label="Resize ' + safeLabel + ' column" ' +
+    'title="Drag to resize · Double-click to Auto Fit" ' +
+    'onmousedown="startColResize(event,' + arg + ')" ' +
+    'ontouchstart="startColResize(event,' + arg + ')" ' +
+    'ondblclick="autoFitColumn(' + arg + ',event)" ' +
+    'onkeydown="onColumnResizeKeydown(event,' + arg + ')"></span>';
+}
+
 function columnWidthEditorHtml(key, t) {
   var value = getConfiguredColumnWidth(t, key);
   var bounds = columnWidthBounds(key);
@@ -1609,6 +1675,8 @@ function columnWidthEditorHtml(key, t) {
       'onchange="setColumnWidth(' + arg + ',this.value)" aria-label="Width in pixels">' +
     '<span class="column-width-unit">px</span>' +
     '<button type="button" class="column-width-step" onclick="adjustColumnWidth(' + arg + ',16)" title="Wider" aria-label="Make column wider">+</button>' +
+    '<button type="button" class="column-width-autofit" onclick="autoFitColumn(' + arg + ',event)" title="Auto Fit this column" aria-label="Auto Fit this column">' +
+      '<span class="material-icons-round">fit_screen</span><span>Fit</span></button>' +
     '<button type="button" class="column-width-reset" onclick="resetColumnWidth(' + arg + ')" title="Reset this width" aria-label="Reset this column width">' +
       '<span class="material-icons-round">restart_alt</span></button>' +
     '</div>';
@@ -1628,7 +1696,7 @@ function renderColumnPanel(t) {
   var actionLabel = FMS.viewMode === 'table' ? 'Steps' : 'Action';
   var html = '<div class="column-panel open" id="columnPanel" onclick="event.stopPropagation()">';
   html += '<div class="column-panel-title">Columns &amp; Widths</div>' +
-    '<div class="column-panel-hint">Drag any header edge, or set an exact width below.</div>';
+    '<div class="column-panel-hint">Drag the visible grip on any header edge, double-click it to Auto Fit, or set an exact width below.</div>';
 
   html += '<div class="column-panel-section-title">System columns</div>';
   html += systemColumnConfigHtml('__serial', 'S.No', 'format_list_numbered', t);
@@ -1652,6 +1720,7 @@ function renderColumnPanel(t) {
 
   html += '<div class="column-panel-footer">' +
     '<button type="button" class="column-panel-reset" onclick="resetAllColumns()"><span class="material-icons-round">visibility</span>Show All</button>' +
+    '<button type="button" class="column-panel-reset column-panel-autofit" onclick="autoFitAllColumns(event)"><span class="material-icons-round">fit_screen</span>Auto Fit All</button>' +
     '<button type="button" class="column-panel-reset" onclick="resetAllColumnWidths()"><span class="material-icons-round">width_normal</span>Reset Widths</button>' +
     '</div></div>';
   return html;
@@ -1709,6 +1778,117 @@ function setColumnWidth(key, rawValue) {
 
 function adjustColumnWidth(key, delta) {
   setColumnWidth(key, getConfiguredColumnWidth(FMS.table, key) + delta);
+}
+
+var autoFitMeasureCanvas = null;
+
+function contentFontScale() {
+  if (FMS.currentFontSize === 'small') return 0.85;
+  if (FMS.currentFontSize === 'large') return 1.25;
+  return 1;
+}
+
+function measureAutoFitText(text, bold, baseFontPx) {
+  var value = String(text == null ? '' : text);
+  var fontPx = (baseFontPx || 11.5) * contentFontScale();
+  try {
+    if (!autoFitMeasureCanvas) autoFitMeasureCanvas = document.createElement('canvas');
+    var context = autoFitMeasureCanvas.getContext && autoFitMeasureCanvas.getContext('2d');
+    if (context) {
+      context.font = (bold ? '600 ' : '400 ') + fontPx + 'px Poppins, Arial, sans-serif';
+      return context.measureText(value).width;
+    }
+  } catch (e) { /* deterministic fallback below */ }
+  return value.length * (bold ? 0.65 : 0.6) * fontPx;
+}
+
+function autoFitDisplayText(rawValue) {
+  var value = String(rawValue == null ? '' : rawValue).trim();
+  if (safeHttpUrl(value)) return 'Click Here';
+  var parts = value.split(/,\s*/);
+  var safeParts = parts.map(function(part) { return safeHttpUrl(part); });
+  if (parts.length > 1 && safeParts.every(function(part) { return !!part; })) {
+    return safeParts.map(function(part, index) { return 'Click Here ' + (index + 1); }).join(', ');
+  }
+  return value;
+}
+
+function measureAutoFitColumn(key) {
+  var t = FMS.table;
+  var bounds = columnWidthBounds(key);
+  var width;
+
+  if (key === '__serial') {
+    var maxSerial = Math.max(1, (t.rows || []).length);
+    width = Math.max(measureAutoFitText('S.No', true, 10.5) + 24, measureAutoFitText(String(maxSerial), false, 11.5) + 22);
+  } else if (key === '__action') {
+    var label = FMS.viewMode === 'table' ? 'Steps' : 'Action';
+    width = measureAutoFitText(label, true, 10.5) + 28;
+    if (FMS.viewMode === 'table') {
+      width = Math.max(width, compactStepsColumnWidth());
+    } else {
+      width = Math.max(width, measureAutoFitText('Fill Step', true, 10) + 34);
+    }
+  } else {
+    var index = parseInt(key, 10);
+    var heading = t.columns[index] || '';
+    // Header needs room for its filter icon, spacing and the visible grip.
+    width = measureAutoFitText(heading, true, 10.5) + 48;
+    (t.rows || []).forEach(function(row) {
+      var rawCellText = row && row.cells ? String(row.cells[index] == null ? '' : row.cells[index]).trim() : '';
+      var cellText = autoFitDisplayText(rawCellText);
+      var renderedAsLink = cellText !== rawCellText;
+      width = Math.max(width, measureAutoFitText(cellText, renderedAsLink, 11.5) + 24);
+    });
+  }
+
+  return Math.ceil(Math.max(bounds.min, Math.min(bounds.max, width)));
+}
+
+function autoFitColumn(key, e) {
+  if (e) {
+    if (e.cancelable) e.preventDefault();
+    e.stopPropagation();
+  }
+  FMS.table.colWidths[key] = measureAutoFitColumn(key);
+  FMS.table.hasSavedColPrefs = true;
+  persistColumnPrefs();
+  rerenderCurrentTable();
+}
+
+function autoFitAllColumns(e) {
+  if (e) {
+    if (e.cancelable) e.preventDefault();
+    e.stopPropagation();
+  }
+  var t = FMS.table;
+  t.colWidths.__serial = measureAutoFitColumn('__serial');
+  t.columns.forEach(function(column, index) {
+    t.colWidths[index] = measureAutoFitColumn(index);
+  });
+  t.colWidths.__action = measureAutoFitColumn('__action');
+  t.hasSavedColPrefs = true;
+  t.columnPanelOpen = true;
+  persistColumnPrefs();
+  rerenderCurrentTable();
+}
+
+function onColumnResizeKeydown(e, key) {
+  if (e.key === 'Enter' || e.key === ' ') {
+    autoFitColumn(key, e);
+    return;
+  }
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  e.preventDefault();
+  e.stopPropagation();
+  var direction = e.key === 'ArrowLeft' ? -1 : 1;
+  if (key === '__action') direction *= -1;
+  var bounds = columnWidthBounds(key);
+  var nextWidth = getConfiguredColumnWidth(FMS.table, key) + (direction * 8);
+  FMS.table.colWidths[key] = Math.max(bounds.min, Math.min(bounds.max, nextWidth));
+  FMS.table.hasSavedColPrefs = true;
+  persistColumnPrefs();
+  rerenderCurrentTable();
 }
 
 function resetColumnWidth(key) {
@@ -2200,45 +2380,310 @@ FMS.requiredFileFields = {}; // fieldName -> true, for every FILE-type question 
 FMS.currentFormRow = null;
 FMS.currentFormHeader = null;
 FMS.currentFormStep = null;
+FMS.currentFormSchemaVersion = '';
+FMS.currentFormGeneration = 0;
+FMS.formDirty = false;
+FMS.formSchemaOutdated = false;
 
-// The form's FIELD STRUCTURE (which fields exist, their Data Type, and
-// their Dropdown options) is identical for every row of the same Step -
-// only the "Planned" value differs per row. So the structure is cached
-// per header+step (like the table cache) and reused instantly on every
-// subsequent "Fill" click for that step, instead of re-fetching and
-// re-showing "Loading form..." every single time.
-FMS.formStructureCache = {}; // "header|||step" -> fields[] (from last successful fetch)
+// The field schema/options are identical for every row of a Step. Cache
+// them in memory AND localStorage so the modal opens instantly even after
+// a browser reload. Row-specific Planned/order details come from the table
+// row already on screen and are refreshed silently in the background.
+FMS.formStructureCache = FMS.formStructureCache || {}; // key -> {fields, version, fetchedAt}
+FMS.formFetchInFlight = {};
+FMS.formFetchLatest = {};
+FMS.formFetchSequence = 0;
+
+function formSchemaSignature(fields) {
+  return JSON.stringify((fields || []).map(function(field) {
+    return { name: field.name, type: field.type, options: field.options || [] };
+  }));
+}
+
+function getFormCacheEntry(cacheKey) {
+  var entry = FMS.formStructureCache[cacheKey];
+  if (!entry) return null;
+  // Backward compatibility with the old fields[]-only memory cache. It can
+  // render immediately, but without a server version it is never treated as
+  // fresh or allowed to submit until the background confirmation returns.
+  if (Array.isArray(entry)) entry = { fields: entry, version: '', fetchedAt: 0 };
+  return entry && Array.isArray(entry.fields) ? entry : null;
+}
+
+function isFormCacheFresh(entry) {
+  return !!(entry && entry.version && entry.fetchedAt && (Date.now() - entry.fetchedAt < FORM_SCHEMA_CACHE_MS));
+}
+
+function basicContextFields(fields) {
+  var source = (fields || []).filter(function(item) {
+    return item && String(item.value == null ? '' : item.value).trim() !== '';
+  });
+  var priority = /(^|\s)(order|po|invoice|customer|party|vendor|style|item|sku|qty|quantity|amount|code|name|date|id)(\s|$)/i;
+  var preferred = source.filter(function(item) { return priority.test(String(item.name || '')); });
+  var others = source.filter(function(item) { return !priority.test(String(item.name || '')); });
+  return preferred.concat(others).slice(0, 8);
+}
+
+function getOrderContextDetail(context) {
+  var details = basicContextFields(context);
+  var exact = /^(order|purchase order|po)(\s*(id|no|number|#))?$/i;
+  for (var i = 0; i < details.length; i++) {
+    var name = String(details[i].name || '').trim().replace(/[._-]+/g, ' ');
+    if (exact.test(name)) return details[i];
+  }
+  for (var j = 0; j < details.length; j++) {
+    var fallbackName = String(details[j].name || '');
+    if (/order/i.test(fallbackName) && /(id|no|number|#)/i.test(fallbackName)) return details[j];
+  }
+  return null;
+}
+
+function formIdentitySubtitle(headerName, context, rowNumber) {
+  var orderDetail = getOrderContextDetail(context);
+  var parts = [];
+  if (orderDetail) {
+    parts.push(String(orderDetail.name || 'Order No') + ': ' + String(orderDetail.value || ''));
+  }
+  if (headerName) parts.push(String(headerName));
+  parts.push('Record #' + String(rowNumber || ''));
+  return parts.join('  •  ');
+}
+
+function updateModalIdentity(headerName, stepName, rowNumber, context) {
+  var title = document.getElementById('modalTitle');
+  var subtitle = document.getElementById('modalSubtitle');
+  if (title) title.textContent = stepName || 'Step Form';
+  if (subtitle) {
+    var identity = formIdentitySubtitle(headerName, context || [], rowNumber);
+    subtitle.textContent = identity;
+    subtitle.title = identity;
+  }
+}
+
+function snapshotFromTableEntry(entry, rowNumber, baseColCount, plannedStart, plannedEnd) {
+  var row = findCachedRowByNumber(entry, rowNumber);
+  if (!entry || !row || !entry.columns || !row.cells) return null;
+  var count = Math.max(0, Math.min(baseColCount || 0, entry.columns.length));
+  var context = [];
+  for (var i = 0; i < count; i++) {
+    if (String(row.cells[i] == null ? '' : row.cells[i]).trim() !== '') {
+      context.push({ name: entry.columns[i], value: row.cells[i] });
+    }
+  }
+
+  var start = plannedStart == null ? count : plannedStart;
+  var end = plannedEnd == null ? entry.columns.length - 1 : plannedEnd;
+  var planned = '';
+  for (var p = start; p <= end && p < entry.columns.length; p++) {
+    if (String(entry.columns[p]).toLowerCase().indexOf('planned') !== -1) {
+      planned = row.cells[p] || '';
+      break;
+    }
+  }
+  return { context: basicContextFields(context), planned: planned };
+}
+
+function getCachedFormSnapshot(headerName, stepName, rowNumber) {
+  var stepEntry = FMS.tableCache[headerName + '|||' + stepName];
+  if (stepEntry) {
+    var stepSnapshot = snapshotFromTableEntry(
+      stepEntry,
+      rowNumber,
+      stepEntry.baseColCount || 0,
+      stepEntry.baseColCount || 0,
+      stepEntry.columns ? stepEntry.columns.length - 1 : 0
+    );
+    if (stepSnapshot) return stepSnapshot;
+  }
+
+  var multiEntry = FMS.multiTableCache[headerName];
+  if (multiEntry) {
+    var stepMeta = null;
+    (multiEntry.steps || []).forEach(function(meta) {
+      if (String(meta.step).trim().toUpperCase() === String(stepName).trim().toUpperCase()) stepMeta = meta;
+    });
+    var multiSnapshot = snapshotFromTableEntry(
+      multiEntry,
+      rowNumber,
+      multiEntry.baseColCount || 0,
+      stepMeta ? stepMeta.colIdxStart : null,
+      stepMeta ? stepMeta.colIdxEnd : null
+    );
+    if (multiSnapshot) return multiSnapshot;
+  }
+  return { context: [], planned: '' };
+}
+
+function formStructureFields(fields) {
+  return (fields || []).map(function(field) {
+    var clone = {};
+    for (var key in field) clone[key] = field[key];
+    // Planned is row-specific and must never be persisted as reusable schema.
+    if (clone.type === 'PLANNED_DISPLAY') clone.value = '';
+    return clone;
+  });
+}
+
+function fieldsWithSnapshot(fields, snapshot) {
+  return formStructureFields(fields).map(function(field) {
+    if (field.type === 'PLANNED_DISPLAY') {
+      field.value = snapshot ? String(snapshot.planned || '') : '';
+    }
+    return field;
+  });
+}
+
+function renderFormContextHtml(context, rowNumber) {
+  var details = basicContextFields(context);
+  var html = '<section class="form-context-card"><div class="form-section-heading">' +
+    '<div><span class="material-icons-round">receipt_long</span><strong>Order details</strong></div>' +
+    '<span class="form-record-row">Record #' + escapeHtml(String(rowNumber || '')) + '</span></div>';
+  if (!details.length) {
+    html += '<div class="form-context-empty">Basic record details are syncing in the background.</div>';
+  } else {
+    html += '<div class="form-context-grid">';
+    details.forEach(function(detail) {
+      html += '<div class="form-context-item"><span>' + escapeHtml(String(detail.name || 'Detail')) + '</span>' +
+        '<strong title="' + escapeHtmlAttr(String(detail.value == null ? '' : detail.value)) + '">' + renderCellValue(detail.value) + '</strong></div>';
+    });
+    html += '</div>';
+  }
+  return html + '</section>';
+}
+
+function renderFormLoadingShell(snapshot, rowNumber) {
+  var body = document.getElementById('modalBody');
+  body.innerHTML = renderFormContextHtml(snapshot.context, rowNumber) +
+    '<section class="form-entry-card"><div class="form-section-heading"><div><span class="material-icons-round">edit_note</span><strong>Step information</strong></div>' +
+    '<span class="form-sync-note"><span class="material-icons-round syncing">sync</span>Preparing form</span></div>' +
+    '<div class="form-skeleton"><span></span><span></span><span class="wide"></span></div></section>';
+  delete body.dataset.formLoadedOnce;
+  updateSubmitButtonState();
+}
 
 function openStepForm(headerName, stepName, rowNumber) {
   FMS.currentFormRow = rowNumber;
   FMS.currentFormHeader = headerName;
   FMS.currentFormStep = stepName;
+  FMS.currentFormGeneration += 1;
+  var formGeneration = FMS.currentFormGeneration;
   FMS.uploadedFiles = {};
+  FMS.requiredFileFields = {};
+  FMS.currentFormSchemaVersion = '';
+  FMS.formDirty = false;
+  FMS.formSchemaOutdated = false;
 
   ensureModalExists();
   var modal = document.getElementById('fmsModal');
-  document.getElementById('modalTitle').textContent = stepName;
+  updateModalIdentity(headerName, stepName, rowNumber, []);
   document.getElementById('modalMsg').className = 'form-msg';
   document.getElementById('modalMsg').style.display = 'none';
   modal.classList.add('active');
 
   var cacheKey = headerName + '|||' + stepName;
-  var cachedFields = FMS.formStructureCache[cacheKey];
+  var cachedEntry = getFormCacheEntry(cacheKey);
+  var snapshot = getCachedFormSnapshot(headerName, stepName, rowNumber);
+  updateModalIdentity(headerName, stepName, rowNumber, snapshot.context);
 
-  if (cachedFields) {
-    // Instant render from cache - no spinner. Every field is safe to reuse
-    // as-is EXCEPT "Planned" (row-specific), which is shown as a quick
-    // "Loading..." placeholder until the background fetch confirms the
-    // real value for THIS row (usually resolves in well under a second).
-    renderStepForm({ success: true, fields: cachedFields }, true);
-    fetchStepFormInBackground(headerName, stepName, rowNumber, cacheKey, false);
+  if (cachedEntry) {
+    renderStepForm({
+      success: true,
+      fields: fieldsWithSnapshot(cachedEntry.fields, snapshot),
+      schemaVersion: cachedEntry.version || '',
+      context: snapshot.context,
+      rowNumber: rowNumber
+    }, true);
+    // A fresh cached schema + current table row needs no blocking request.
+    // Refresh silently only when stale or when the table had no context.
+    if (!isFormCacheFresh(cachedEntry) || !snapshot.context.length) {
+      fetchStepFormInBackground(headerName, stepName, rowNumber, cacheKey, false, false, formGeneration);
+    }
   } else {
-    // First time ever opening this step's form - show the loader once.
-    var body = document.getElementById('modalBody');
-    if (body) delete body.dataset.formLoadedOnce;
-    document.getElementById('modalBody').innerHTML = '<div class="pending-loading">Loading form...</div>';
-    fetchStepFormInBackground(headerName, stepName, rowNumber, cacheKey, true);
+    renderFormLoadingShell(snapshot, rowNumber);
+    fetchStepFormInBackground(headerName, stepName, rowNumber, cacheKey, true, false, formGeneration);
   }
+}
+
+function markOpenFormSchemaOutdated(cacheKey) {
+  var currentKey = FMS.currentFormHeader && FMS.currentFormStep
+    ? FMS.currentFormHeader + '|||' + FMS.currentFormStep
+    : '';
+  if (currentKey !== cacheKey) return;
+  FMS.formSchemaOutdated = true;
+  var schemaMsg = document.getElementById('modalMsg');
+  if (schemaMsg) {
+    schemaMsg.className = 'form-msg error';
+    schemaMsg.textContent = 'This step form was updated. Close and reopen it before submitting; your current entries were not discarded.';
+    schemaMsg.style.display = 'block';
+  }
+  updateSubmitButtonState();
+}
+
+function storeFormStructureEntry(cacheKey, fields, version, fetchedAt) {
+  var oldEntry = getFormCacheEntry(cacheKey);
+  var cleanFields = formStructureFields(fields);
+  var changed = !!(oldEntry && (
+    String(oldEntry.version || '') !== String(version || '') ||
+    formSchemaSignature(oldEntry.fields) !== formSchemaSignature(cleanFields)
+  ));
+  FMS.formStructureCache[cacheKey] = {
+    fields: cleanFields,
+    version: version || '',
+    fetchedAt: fetchedAt
+  };
+  if (changed) markOpenFormSchemaOutdated(cacheKey);
+  return changed;
+}
+
+function cacheFormSchemasFromTable(headerName, stepName, data) {
+  var now = Date.now();
+  var stored = false;
+  var changed = false;
+  if (stepName && data && Array.isArray(data.formSchema)) {
+    changed = storeFormStructureEntry(
+      headerName + '|||' + stepName,
+      data.formSchema,
+      data.formSchemaVersion || '',
+      now
+    ) || changed;
+    stored = true;
+  }
+  var schemas = data && data.formSchemas;
+  var versions = (data && data.formSchemaVersions) || {};
+  if (schemas) {
+    for (var schemaStep in schemas) {
+      if (!Array.isArray(schemas[schemaStep])) continue;
+      changed = storeFormStructureEntry(
+        headerName + '|||' + schemaStep,
+        schemas[schemaStep],
+        versions[schemaStep] || '',
+        now
+      ) || changed;
+      stored = true;
+    }
+  }
+  if (stored) persistFormStructureCache();
+  return changed;
+}
+
+function warmStepFormCache(headerName, stepName, rowNumber) {
+  if (!rowNumber) return;
+  var cacheKey = headerName + '|||' + stepName;
+  if (isFormCacheFresh(getFormCacheEntry(cacheKey)) || FMS.formFetchInFlight[cacheKey]) return;
+  fetchStepFormInBackground(headerName, stepName, rowNumber, cacheKey, false, true);
+}
+
+function warmFormsFromMultiTable(headerName, data) {
+  var warmed = {};
+  (data.rows || []).some(function(row) {
+    (row.steps || []).forEach(function(stepState) {
+      if (!warmed[stepState.step] && stepState.status === 'pending') {
+        warmed[stepState.step] = true;
+        warmStepFormCache(headerName, stepState.step, row.row);
+      }
+    });
+    return Object.keys(warmed).length >= 4; // avoid flooding Apps Script with calls
+  });
 }
 
 /**
@@ -2246,10 +2691,18 @@ function openStepForm(headerName, stepName, rowNumber) {
  * any other field the user may already be filling in. Used when the
  * background confirmation fetch resolves after an instant cache-render.
  */
+function findFormFieldByName(name) {
+  var fields = document.querySelectorAll('#modalFields .form-field');
+  for (var i = 0; i < fields.length; i++) {
+    if (fields[i].getAttribute('data-field-name') === String(name)) return fields[i];
+  }
+  return null;
+}
+
 function updatePlannedDisplay(fields) {
   var plannedField = fields.filter(function(f) { return f.type === 'PLANNED_DISPLAY'; })[0];
   if (!plannedField) return;
-  var fieldDiv = document.querySelector('.form-field[data-field-name="' + plannedField.name.replace(/"/g, '\\"') + '"]');
+  var fieldDiv = findFormFieldByName(plannedField.name);
   if (!fieldDiv) return;
   var display = fieldDiv.querySelector('.readonly-display');
   if (display) {
@@ -2258,37 +2711,101 @@ function updatePlannedDisplay(fields) {
   }
 }
 
-function fetchStepFormInBackground(headerName, stepName, rowNumber, cacheKey, showErrorsInline) {
+function updateFormContext(context, rowNumber) {
+  updateModalIdentity(FMS.currentFormHeader, FMS.currentFormStep, rowNumber, context || []);
+  var existing = document.querySelector('#modalBody .form-context-card');
+  if (!existing) return;
+  var holder = document.createElement('div');
+  holder.innerHTML = renderFormContextHtml(context, rowNumber);
+  if (holder.firstElementChild) existing.replaceWith(holder.firstElementChild);
+}
+
+function beginFormFetch(cacheKey) {
+  FMS.formFetchSequence += 1;
+  var token = FMS.formFetchSequence;
+  FMS.formFetchLatest[cacheKey] = token;
+  FMS.formFetchInFlight[cacheKey] = true;
+  return token;
+}
+
+function completeLatestFormFetch(cacheKey, token) {
+  if (FMS.formFetchLatest[cacheKey] !== token) return false;
+  delete FMS.formFetchLatest[cacheKey];
+  delete FMS.formFetchInFlight[cacheKey];
+  return true;
+}
+
+function fetchStepFormInBackground(headerName, stepName, rowNumber, cacheKey, showErrorsInline, isWarmOnly, formGeneration) {
+  var requestToken = beginFormFetch(cacheKey);
   google.script.run
     .withSuccessHandler(function(res) {
+      // Ignore every side effect from an older request for this Step. A
+      // newer popup/request owns both the reusable schema cache and UI.
+      if (!completeLatestFormFetch(cacheKey, requestToken)) return;
+      if (!isWarmOnly && FMS.currentFormGeneration !== formGeneration) return;
       if (!res.success) {
-        if (showErrorsInline) {
+        if (showErrorsInline && !isWarmOnly && FMS.currentFormGeneration === formGeneration) {
           document.getElementById('modalBody').innerHTML = '<div class="pending-empty">' + escapeHtml(res.message || 'Could not load form') + '</div>';
         }
         return;
       }
-      FMS.formStructureCache[cacheKey] = res.fields;
-      // Only touch the modal if the user is still on this exact step+row
-      // (they may have closed it or clicked a different row already).
-      if (FMS.currentFormHeader === headerName && FMS.currentFormStep === stepName && FMS.currentFormRow === rowNumber) {
+      var oldEntry = getFormCacheEntry(cacheKey);
+      var cleanResponseFields = formStructureFields(res.fields || []);
+      var schemaChanged = !!(oldEntry && (
+        String(oldEntry.version || '') !== String(res.schemaVersion || '') ||
+        formSchemaSignature(oldEntry.fields) !== formSchemaSignature(cleanResponseFields)
+      ));
+      storeFormStructureEntry(cacheKey, cleanResponseFields, res.schemaVersion || '', Date.now());
+      persistFormStructureCache();
+      // Only touch the modal if the user is still on this exact step+row.
+      if (!isWarmOnly && FMS.currentFormHeader === headerName && FMS.currentFormStep === stepName &&
+          FMS.currentFormRow === rowNumber && FMS.currentFormGeneration === formGeneration) {
+        FMS.currentFormSchemaVersion = res.schemaVersion || '';
         var formBody = document.getElementById('modalBody');
         if (formBody && formBody.dataset.formLoadedOnce) {
-          // Form was already rendered from cache and the user may already
-          // be typing - only patch the ONE row-specific field ("Planned")
-          // in place, instead of re-rendering the whole form and wiping
-          // out whatever the user has already entered.
-          updatePlannedDisplay(res.fields);
+          if (schemaChanged && !FMS.formDirty) {
+            // Safe to refresh the complete form because the user has not
+            // entered anything yet. This includes newly required uploads.
+            renderStepForm(res, false);
+          } else if (schemaChanged) {
+            // Never allow submission from a stale form that could omit a
+            // newly-added required field. Preserve typing and ask to reopen.
+            FMS.formSchemaOutdated = true;
+            var schemaMsg = document.getElementById('modalMsg');
+            if (schemaMsg) {
+              schemaMsg.className = 'form-msg error';
+              schemaMsg.textContent = 'This step form was updated. Close and reopen it before submitting; your current entries were not discarded.';
+              schemaMsg.style.display = 'block';
+            }
+            updateSubmitButtonState();
+            updateFormContext(res.context || [], rowNumber);
+          } else {
+            // Preserve anything already typed; patch only row-specific data.
+            updatePlannedDisplay(res.fields || []);
+            updateFormContext(res.context || [], rowNumber);
+            updateSubmitButtonState();
+          }
         } else {
           renderStepForm(res, false);
         }
       }
     })
     .withFailureHandler(function(err) {
-      if (showErrorsInline) {
-        document.getElementById('modalBody').innerHTML = '<div class="pending-empty">' + escapeHtml(err.message) + '</div>';
+      if (!completeLatestFormFetch(cacheKey, requestToken)) return;
+      if (!isWarmOnly && FMS.currentFormGeneration !== formGeneration) return;
+      if (showErrorsInline && !isWarmOnly && FMS.currentFormGeneration === formGeneration) {
+        document.getElementById('modalBody').innerHTML = '<div class="pending-empty">' + escapeHtml(err.message || 'Could not load form') + '</div>';
       }
     })
-    .wfGetStepForm(FMS_SESSION.sheetUrl, FMS_SESSION.masterSheet, FMS_SESSION.dropdownSheet || 'DROPDPWN', headerName, stepName, rowNumber);
+    .wfGetStepForm(
+      FMS_SESSION.sheetUrl,
+      FMS_SESSION.masterSheet,
+      FMS_SESSION.dropdownSheet || 'DROPDPWN',
+      headerName,
+      stepName,
+      rowNumber,
+      FMS_SESSION.stepsSheet
+    );
 }
 
 function renderStepForm(res, isInstantFromCache) {
@@ -2298,49 +2815,65 @@ function renderStepForm(res, isInstantFromCache) {
     return;
   }
 
+  // This is a complete schema render, so it is safe to submit again once
+  // the response carries the server version used for stale-form validation.
+  FMS.currentFormSchemaVersion = res.schemaVersion || '';
+  FMS.formSchemaOutdated = false;
+  FMS.formDirty = false;
+
   // Recomputed fresh on every render: which FILE-type fields this form has
   // (their Submit-disable state is tracked live in handleFileSelect/removeFile).
   FMS.requiredFileFields = {};
 
-  var html = '';
+  var fieldsHtml = '';
   res.fields.forEach(function(field, idx) {
     var fid = 'field_' + idx;
-    html += '<div class="form-field" data-field-name="' + escapeAttr(field.name) + '">';
-    html += '<label>' + escapeHtml(field.name) + '</label>';
+    fieldsHtml += '<div class="form-field" data-field-name="' + escapeHtmlAttr(field.name) + '">';
+    fieldsHtml += '<label>' + escapeHtml(field.name) + '</label>';
 
     if (field.type === 'PLANNED_DISPLAY') {
       // "Planned" is the ONE field that's genuinely row-specific, so when
       // instantly rendering from cache it must show a neutral placeholder
       // (not the previous row's cached date) until the quick background
       // fetch confirms the real value for this exact row.
-      var plannedText = isInstantFromCache ? 'Loading...' : (field.value ? escapeHtml(field.value) : 'Not set yet');
-      html += '<div class="readonly-display"><span class="material-icons-round">event</span>' + plannedText + '</div>';
+      var plannedText = field.value ? escapeHtml(field.value) : (isInstantFromCache ? 'Syncing planned date...' : 'Not set yet');
+      fieldsHtml += '<div class="readonly-display"><span class="material-icons-round">event</span><span>' + plannedText + '</span></div>';
     } else if (field.type.indexOf('DROPDOWN') !== -1 || field.type.indexOf('CHECKBOX') !== -1) {
-      html += '<select id="' + fid + '" onchange="onFormFieldChanged(this)"><option value="">-- Select --</option>';
+      fieldsHtml += '<select id="' + fid + '" onchange="onFormFieldChanged(this)"><option value="">Select ' + escapeHtml(field.name) + '</option>';
       (field.options || []).forEach(function(opt) {
-        html += '<option value="' + escapeAttr(opt) + '">' + escapeHtml(opt) + '</option>';
+        fieldsHtml += '<option value="' + escapeHtmlAttr(opt) + '">' + escapeHtml(opt) + '</option>';
       });
-      html += '</select>';
+      fieldsHtml += '</select>';
     } else if (field.type.indexOf('LONG TEXT') !== -1) {
-      html += '<textarea id="' + fid + '" oninput="onFormFieldChanged(this)"></textarea>';
+      fieldsHtml += '<textarea id="' + fid + '" placeholder="Enter ' + escapeHtmlAttr(field.name) + '" oninput="onFormFieldChanged(this)"></textarea>';
     } else if (field.type.indexOf('NUMBER') !== -1) {
-      html += '<input type="number" id="' + fid + '" oninput="onFormFieldChanged(this)">';
+      fieldsHtml += '<input type="number" id="' + fid + '" placeholder="Enter ' + escapeHtmlAttr(field.name) + '" oninput="onFormFieldChanged(this)">';
     } else if (field.type.indexOf('FILE') !== -1) {
-      FMS.requiredFileFields[field.name] = true; // tracked so Submit stays disabled until uploaded
-      html += '<div class="file-drop" id="' + fid + '_drop" onclick="document.getElementById(\'' + fid + '\').click()">' +
-        '<span class="material-icons-round" style="font-size:24px;display:block;margin-bottom:4px;">cloud_upload</span>' +
-        '<span class="file-drop-text">Click to upload (multiple files allowed)</span>' +
-        '<input type="file" id="' + fid + '" multiple onchange="handleFileSelect(this, \'' + escapeAttr(field.name) + '\')">' +
+      FMS.requiredFileFields[field.name] = true;
+      fieldsHtml += '<div class="file-drop" id="' + fid + '_drop" onclick="document.getElementById(\'' + fid + '\').click()">' +
+        '<span class="file-upload-icon material-icons-round">cloud_upload</span>' +
+        '<strong>Upload ' + escapeHtml(field.name) + '</strong>' +
+        '<span class="file-drop-text">Click to choose one or multiple files</span>' +
+        '<input type="file" id="' + fid + '" multiple onchange="handleFileSelect(this)">' +
         '</div>' +
         '<div class="file-list" id="' + fid + '_list"></div>' +
-        '<div class="file-required-hint" id="' + fid + '_hint">File upload required before you can submit</div>';
+        '<div class="file-required-hint" id="' + fid + '_hint"><span class="material-icons-round">info</span>Upload required before submission</div>';
     } else {
-      html += '<input type="text" id="' + fid + '" oninput="onFormFieldChanged(this)">';
+      fieldsHtml += '<input type="text" id="' + fid + '" placeholder="Enter ' + escapeHtmlAttr(field.name) + '" oninput="onFormFieldChanged(this)">';
     }
-    html += '</div>';
+    fieldsHtml += '</div>';
   });
 
-  body.innerHTML = html || '<div class="pending-empty">No fields to fill for this step.</div>';
+  var rowNumber = res.rowNumber || FMS.currentFormRow;
+  updateModalIdentity(FMS.currentFormHeader, FMS.currentFormStep, rowNumber, res.context || []);
+  var contextHtml = renderFormContextHtml(res.context || [], rowNumber);
+  var entryHtml = '<section class="form-entry-card"><div class="form-section-heading"><div>' +
+    '<span class="material-icons-round">edit_note</span><strong>Step information</strong></div>' +
+    '<span class="form-sync-note"><span class="material-icons-round">bolt</span>Ready to fill</span></div>' +
+    '<div class="modal-fields" id="modalFields">' +
+    (fieldsHtml || '<div class="pending-empty">No fields to fill for this step.</div>') + '</div></section>';
+
+  body.innerHTML = contextHtml + entryHtml;
   body.dataset.formLoadedOnce = '1';
   updateSubmitButtonState();
   applyAdaptiveFormLayout(res.fields);
@@ -2355,9 +2888,9 @@ function renderStepForm(res, isInstantFromCache) {
  * single-column version would truly overflow.
  */
 function applyAdaptiveFormLayout(fields) {
-  var body = document.getElementById('modalBody');
+  var fieldsGrid = document.getElementById('modalFields');
   var modalBox = document.querySelector('.modal-box');
-  if (!body || !modalBox) return;
+  if (!fieldsGrid || !modalBox) return;
 
   // Heuristic: long-form fields (textarea, file-drop) take much more
   // vertical room than a single input/select, so weight them higher when
@@ -2373,11 +2906,11 @@ function applyAdaptiveFormLayout(fields) {
   var shouldTryTwoColumns = weight >= 6; // roughly: more than ~6 simple fields, or fewer with big ones
 
   if (shouldTryTwoColumns) {
-    body.classList.add('form-fields-grid');
+    fieldsGrid.classList.add('form-fields-grid');
     modalBox.classList.add('modal-wide');
     markFullWidthFields();
   } else {
-    body.classList.remove('form-fields-grid');
+    fieldsGrid.classList.remove('form-fields-grid');
     modalBox.classList.remove('modal-wide');
   }
 
@@ -2387,12 +2920,13 @@ function applyAdaptiveFormLayout(fields) {
   // (the modal body itself still scrolls internally as a last resort,
   // but this keeps that from being needed in the vast majority of cases).
   requestAnimationFrameSafe(function() {
-    var footer = modalBox.querySelector('.modal-footer:last-child');
+    var footer = modalBox.querySelector('.modal-footer');
     var header = modalBox.querySelector('.modal-header');
-    var available = window.innerHeight * 0.88 - (header ? header.offsetHeight : 60) - (footer ? footer.offsetHeight * 2 : 100);
-    if (body.scrollHeight > available && !shouldTryTwoColumns) {
+    var body = document.getElementById('modalBody');
+    var available = window.innerHeight * 0.9 - (header ? header.offsetHeight : 64) - (footer ? footer.offsetHeight : 74);
+    if (body && body.scrollHeight > available && !shouldTryTwoColumns) {
       // Single column still doesn't fit - switch to 2 columns as a fallback
-      body.classList.add('form-fields-grid');
+      fieldsGrid.classList.add('form-fields-grid');
       modalBox.classList.add('modal-wide');
       markFullWidthFields();
     }
@@ -2408,7 +2942,7 @@ function requestAnimationFrameSafe(fn) {
 // grid (they need the extra horizontal room and don't pair well side by
 // side with a short field).
 function markFullWidthFields() {
-  var fieldDivs = document.querySelectorAll('#modalBody .form-field');
+  var fieldDivs = document.querySelectorAll('#modalFields .form-field');
   fieldDivs.forEach(function(div) {
     var hasTextarea = div.querySelector('textarea');
     var hasFileDrop = div.querySelector('.file-drop');
@@ -2435,15 +2969,17 @@ function updateSubmitButtonState() {
     return FMS.uploadedFiles[name] && FMS.uploadedFiles[name].length > 0;
   });
 
-  submitBtn.disabled = !allUploaded;
+  var schemaReady = !!FMS.currentFormSchemaVersion;
+  submitBtn.disabled = !allUploaded || FMS.formSchemaOutdated || !schemaReady;
   submitBtn.classList.toggle('btn-disabled-upload', !allUploaded);
+  submitBtn.title = schemaReady ? '' : 'Confirming the latest form questions...';
 
   // Show/hide the "File upload required" hint under each pending file field
   // + mark/unmark the field as "filled" (colored label) alongside every
   // other answered question in the form.
   requiredNames.forEach(function(name) {
     var uploaded = FMS.uploadedFiles[name] && FMS.uploadedFiles[name].length > 0;
-    var fieldDiv = document.querySelector('.form-field[data-field-name="' + name.replace(/"/g, '\\"') + '"]');
+    var fieldDiv = findFormFieldByName(name);
     if (!fieldDiv) return;
     var hint = fieldDiv.querySelector('.file-required-hint');
     var drop = fieldDiv.querySelector('.file-drop');
@@ -2461,6 +2997,7 @@ function updateSubmitButtonState() {
  * updateSubmitButtonState() instead, since it isn't a simple input value).
  */
 function onFormFieldChanged(inputEl) {
+  FMS.formDirty = true;
   var fieldDiv = inputEl.closest('.form-field');
   if (!fieldDiv) return;
   var hasValue = String(inputEl.value || '').trim() !== '';
@@ -2468,6 +3005,12 @@ function onFormFieldChanged(inputEl) {
 }
 
 function handleFileSelect(input, fieldName) {
+  if (!fieldName) {
+    var ownerField = input.closest ? input.closest('.form-field') : null;
+    fieldName = ownerField ? ownerField.getAttribute('data-field-name') : '';
+  }
+  if (!fieldName) return;
+  FMS.formDirty = true;
   var files = Array.prototype.slice.call(input.files);
   if (!FMS.uploadedFiles[fieldName]) FMS.uploadedFiles[fieldName] = [];
 
@@ -2495,7 +3038,7 @@ function handleFileSelect(input, fieldName) {
 }
 
 function renderFileList(fieldName) {
-  var fieldDiv = document.querySelector('.form-field[data-field-name="' + fieldName.replace(/"/g, '\\"') + '"]');
+  var fieldDiv = findFormFieldByName(fieldName);
   if (!fieldDiv) return;
   var listDiv = fieldDiv.querySelector('.file-list');
   if (!listDiv) return;
@@ -2503,11 +3046,18 @@ function renderFileList(fieldName) {
   var files = FMS.uploadedFiles[fieldName] || [];
   listDiv.innerHTML = files.map(function(f, i) {
     return '<div class="file-chip"><span>' + escapeHtml(f.fileName) + '</span>' +
-      '<span class="remove-file material-icons-round" onclick="removeFile(\'' + escapeAttr(fieldName) + '\',' + i + ')">close</span></div>';
+      '<span class="remove-file material-icons-round" onclick="removeFileByElement(this,' + i + ')">close</span></div>';
   }).join('');
 }
 
+function removeFileByElement(element, index) {
+  var ownerField = element && element.closest ? element.closest('.form-field') : null;
+  var fieldName = ownerField ? ownerField.getAttribute('data-field-name') : '';
+  if (fieldName) removeFile(fieldName, index);
+}
+
 function removeFile(fieldName, index) {
+  FMS.formDirty = true;
   if (FMS.uploadedFiles[fieldName]) {
     FMS.uploadedFiles[fieldName].splice(index, 1);
     renderFileList(fieldName);
@@ -2622,8 +3172,16 @@ function applyOptimisticStepCompletion(headerName, stepName, rowNumber) {
 // values instead of the original server-confirmed ones.
 FMS.submitInFlight = false;
 
+function isSubmittedFormStillCurrent(headerName, stepName, rowNumber, schemaVersion, formGeneration) {
+  return FMS.currentFormHeader === headerName &&
+    FMS.currentFormStep === stepName &&
+    FMS.currentFormRow === rowNumber &&
+    FMS.currentFormSchemaVersion === schemaVersion &&
+    FMS.currentFormGeneration === formGeneration;
+}
+
 function submitStepForm() {
-  if (FMS.submitInFlight) return;
+  if (FMS.submitInFlight || FMS.formSchemaOutdated || !FMS.currentFormSchemaVersion) return;
 
   var body = document.getElementById('modalBody');
   var formValues = {};
@@ -2638,13 +3196,15 @@ function submitStepForm() {
   FMS.submitInFlight = true;
   var submitBtn = document.getElementById('modalSubmitBtn');
   submitBtn.disabled = true;
-  submitBtn.textContent = 'Saving...';
+  submitBtn.innerHTML = '<span class="material-icons-round syncing">sync</span>Saving...';
 
   // Capture NOW - the modal/currentForm* state may change (or the modal
   // may be closed) before the server call resolves.
   var targetHeader = FMS.currentFormHeader;
   var targetStep = FMS.currentFormStep;
   var targetRow = FMS.currentFormRow;
+  var targetSchemaVersion = FMS.currentFormSchemaVersion;
+  var targetFormGeneration = FMS.currentFormGeneration;
 
   // Update the UI INSTANTLY - the row flips to completed/unlocks the next
   // step right now, in whichever view is currently on screen, without
@@ -2660,76 +3220,104 @@ function submitStepForm() {
   google.script.run
     .withSuccessHandler(function(res) {
       FMS.submitInFlight = false;
-      submitBtn.disabled = false;
-      submitBtn.textContent = 'Submit';
-      var msg = document.getElementById('modalMsg');
+      var sameForm = isSubmittedFormStillCurrent(targetHeader, targetStep, targetRow, targetSchemaVersion, targetFormGeneration);
+      var msg = sameForm ? document.getElementById('modalMsg') : null;
+      if (sameForm && submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<span class="material-icons-round">check_circle</span>Submit';
+      }
       if (res.success) {
-        msg.className = 'form-msg success';
-        msg.textContent = res.message;
-        msg.style.display = 'block';
+        if (msg) {
+          msg.className = 'form-msg success';
+          msg.textContent = res.message;
+          msg.style.display = 'block';
+        }
         setTimeout(function() {
-          closeModal();
-          // IMPORTANT: do NOT delete the caches here. Both loaders render
-          // instantly from the existing cache (already showing the
-          // optimistic "completed" state applied above - no flash back to
-          // "pending") and then silently re-fetch the confirmed rows in
-          // the background, the exact same "instant + silent refresh"
-          // pattern used everywhere else.
-          if (FMS.viewMode === 'table') {
-            loadMultiStepTable(FMS.currentHeader);
-          } else {
-            loadStepTable(FMS.currentHeader, FMS.currentStep);
+          // Never close or mutate a different form the user opened while
+          // this request was in flight.
+          if (isSubmittedFormStillCurrent(targetHeader, targetStep, targetRow, targetSchemaVersion, targetFormGeneration)) closeModal();
+          // IMPORTANT: keep the optimistic caches and silently confirm the
+          // table only when the user is still viewing the submitted flow.
+          if (FMS.currentHeader === targetHeader) {
+            if (FMS.viewMode === 'table') {
+              loadMultiStepTable(targetHeader);
+            } else if (FMS.currentStep === targetStep) {
+              loadStepTable(targetHeader, targetStep);
+            }
           }
         }, 700);
       } else {
         // Server rejected the save (validation, permissions, etc.) - roll
         // the optimistic change back so the row honestly reflects reality.
         optimistic.revert();
+        if (res.code === 'FORM_SCHEMA_OUTDATED') {
+          var staleKey = targetHeader + '|||' + targetStep;
+          var staleEntry = getFormCacheEntry(staleKey);
+          // A newer form may already have refreshed this cache while the old
+          // request was in flight. Never delete or disable that newer form.
+          if (sameForm && staleEntry && staleEntry.version === targetSchemaVersion) {
+            delete FMS.formStructureCache[staleKey];
+            persistFormStructureCache();
+          }
+          if (sameForm) {
+            FMS.formSchemaOutdated = true;
+            updateSubmitButtonState();
+          }
+        }
         if (FMS.currentHeader === targetHeader && document.getElementById('tableContainer')) {
           rerenderCurrentTable();
         }
-        msg.className = 'form-msg error';
-        msg.textContent = res.message;
-        msg.style.display = 'block';
+        if (msg) {
+          msg.className = 'form-msg error';
+          msg.textContent = res.message;
+          msg.style.display = 'block';
+        }
       }
     })
     .withFailureHandler(function(err) {
       FMS.submitInFlight = false;
-      submitBtn.disabled = false;
-      submitBtn.textContent = 'Submit';
+      var sameForm = isSubmittedFormStillCurrent(targetHeader, targetStep, targetRow, targetSchemaVersion, targetFormGeneration);
+      if (sameForm && submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<span class="material-icons-round">check_circle</span>Submit';
+      }
       optimistic.revert();
       if (FMS.currentHeader === targetHeader && document.getElementById('tableContainer')) {
         rerenderCurrentTable();
       }
-      var msg = document.getElementById('modalMsg');
-      msg.className = 'form-msg error';
-      msg.textContent = 'Error: ' + err.message;
-      msg.style.display = 'block';
+      if (sameForm) {
+        var msg = document.getElementById('modalMsg');
+        if (msg) {
+          msg.className = 'form-msg error';
+          msg.textContent = 'Error: ' + err.message;
+          msg.style.display = 'block';
+        }
+      }
     })
     // Uses currentFormHeader/currentFormStep (set by openStepForm) rather
     // than currentHeader/currentStep - critical in Table View, where the
     // form being submitted belongs to whichever step's chip was clicked,
     // not to a single "currently open" step.
     .wfSubmitStep(FMS_SESSION.sheetUrl, FMS_SESSION.masterSheet, FMS_SESSION.stepsSheet,
-      targetHeader, targetStep, targetRow, formValues, FMS.uploadedFiles, FMS_SESSION.userName);
+      targetHeader, targetStep, targetRow, formValues, FMS.uploadedFiles, FMS_SESSION.userName, targetSchemaVersion);
 }
 
 function ensureModalExists() {
   if (document.getElementById('fmsModal')) return;
 
   var modalHtml =
-    '<div class="modal-overlay" id="fmsModal">' +
+    '<div class="modal-overlay" id="fmsModal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">' +
     '<div class="modal-box">' +
-    '<div class="modal-header"><h3 id="modalTitle">Step Form</h3>' +
-    '<button class="icon-btn" onclick="closeModal()"><span class="material-icons-round">close</span></button></div>' +
+    '<div class="modal-header"><div class="modal-title-wrap">' +
+    '<span class="modal-step-icon material-icons-round">task_alt</span>' +
+    '<div><h3 id="modalTitle">Step Form</h3><p id="modalSubtitle">Workflow record</p></div></div>' +
+    '<button class="icon-btn modal-close-btn" onclick="closeModal()" title="Close form" aria-label="Close form"><span class="material-icons-round">close</span></button></div>' +
     '<div class="modal-body" id="modalBody"></div>' +
-    '<div class="modal-footer">' +
-    '<div class="form-msg" id="modalMsg" style="width:100%; margin: 0 0 10px 0; display:none;"></div>' +
-    '</div>' +
-    '<div class="modal-footer">' +
-    '<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>' +
-    '<button class="btn btn-primary" id="modalSubmitBtn" onclick="submitStepForm()">Submit</button>' +
-    '</div>' +
+    '<div class="modal-footer"><div class="form-msg" id="modalMsg"></div>' +
+    '<div class="modal-actions">' +
+    '<button class="btn btn-secondary" onclick="closeModal()"><span class="material-icons-round">close</span>Cancel</button>' +
+    '<button class="btn btn-primary" id="modalSubmitBtn" onclick="submitStepForm()"><span class="material-icons-round">check_circle</span>Submit</button>' +
+    '</div></div>' +
     '</div>' +
     '</div>';
 
@@ -2743,6 +3331,9 @@ function ensureModalExists() {
 function closeModal() {
   var modal = document.getElementById('fmsModal');
   if (modal) modal.classList.remove('active');
+  // Invalidate every callback owned by the closed popup, even if the same
+  // row is immediately reopened with the same schema version.
+  FMS.currentFormGeneration += 1;
 }
 
 // ===== LOAD PERMISSIONS (sidebar headers/steps - remembered across refreshes) =====
@@ -2787,6 +3378,15 @@ function escapeHtml(str) {
   var div = document.createElement('div');
   div.textContent = str;
   return div.innerHTML;
+}
+
+function escapeHtmlAttr(str) {
+  return String(str == null ? '' : str)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 function escapeAttr(str) {

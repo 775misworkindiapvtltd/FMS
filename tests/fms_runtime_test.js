@@ -242,15 +242,19 @@ const clientDocument = {
   },
   body: { classList: { add() {}, remove() {}, toggle() {} }, insertAdjacentHTML() {} }
 };
+const clientStorage = new Map();
 const clientWindow = {
-  localStorage: { getItem() { return null; }, setItem() {} },
+  localStorage: {
+    getItem(key) { return clientStorage.has(key) ? clientStorage.get(key) : null; },
+    setItem(key, value) { clientStorage.set(key, String(value)); }
+  },
   matchMedia() { return { matches: false }; },
   innerWidth: 1440,
   innerHeight: 900,
   addEventListener() {}
 };
 const clientContext = vm.createContext({
-  console, Date, JSON, Math, String, Number, Boolean, Object, Array, RegExp, Error,
+  console, Date, JSON, Math, String, Number, Boolean, Object, Array, RegExp, Error, URL,
   parseInt, parseFloat, isNaN, isFinite, setTimeout, clearTimeout, setInterval, clearInterval,
   document: clientDocument, window: clientWindow
 });
@@ -301,7 +305,7 @@ test('deployment contract reports a complete runtime', () => {
   const info = context.fmsGetRuntimeInfo();
   assert.strictEqual(info.success, true);
   assert.deepStrictEqual(Array.from(info.missing), []);
-  assert.strictEqual(info.buildId, '2026-07-22-runtime-safe-2');
+  assert.strictEqual(info.buildId, '2026-07-22-column-width-2');
 });
 
 test('deployment contract is ready when calculateTAT and TAT_Calculator.gs are absent', () => {
@@ -316,7 +320,7 @@ test('doGet renders FMS Login and explicit deployment status', () => {
   const login = context.doGet({ parameter: {} });
   assert.strictEqual(login.title, 'FMS - Flow Management System');
   assert.match(login.getContent(), /Flow Management System/);
-  assert.match(login.getContent(), /Build 2026-07-22-runtime-safe-2/);
+  assert.match(login.getContent(), /Build 2026-07-22-column-width-2/);
   const status = context.doGet({ parameter: { fms_check: '1' } });
   assert.match(status.getContent(), /FMS deployment is ready/);
 });
@@ -389,10 +393,17 @@ test('step and multi-step tables load with pending/completed/locked state', () =
   assert.strictEqual(stepOne.success, true);
   assert.deepStrictEqual(Array.from(stepOne.columns), ['Item', 'Planned', 'Actual', 'Note']);
   assert.deepStrictEqual(Array.from(stepOne.rows, (row) => row.status), ['pending', 'completed']);
+  assert.ok(Array.isArray(stepOne.formSchema));
+  assert.match(stepOne.formSchemaVersion, /^schema-[0-9a-f]+$/);
+  assert.ok(Array.from(stepOne.formSchema).some((field) => field.type === 'PLANNED_DISPLAY'));
 
   const multi = context.wfGetMultiStepTableData(masterUrl, 'MASTER', 'STEPS', 'Flow A', 'USER1');
   assert.strictEqual(multi.success, true);
   assert.strictEqual(multi.steps.length, 2);
+  assert.ok(multi.formSchemas && Array.isArray(multi.formSchemas['Step 1']));
+  assert.ok(Array.isArray(multi.formSchemas['Step 2']));
+  assert.strictEqual(multi.formSchemaVersions['Step 1'], stepOne.formSchemaVersion);
+  assert.match(multi.formSchemaVersions['Step 2'], /^schema-[0-9a-f]+$/);
   assert.deepStrictEqual(Array.from(multi.rows[0].steps, (step) => step.status), ['pending', 'locked']);
   assert.deepStrictEqual(Array.from(multi.rows[1].steps, (step) => step.status), ['completed', 'pending']);
 });
@@ -406,9 +417,14 @@ test('table and form date rendering works with formatResult removed', () => {
   assert.strictEqual(dateOnly, '24 Jul 26');
   const table = context.wfGetStepTableData(masterUrl, 'MASTER', 'STEPS', 'Flow A', 'Step 1');
   assert.strictEqual(table.success, true);
-  const form = context.wfGetStepForm(masterUrl, 'MASTER', 'DROPDPWN', 'Flow A', 'Step 1', 8);
+  const form = context.wfGetStepForm(masterUrl, 'MASTER', 'DROPDPWN', 'Flow A', 'Step 1', 8, 'STEPS');
   assert.strictEqual(form.success, true);
+  assert.match(form.schemaVersion, /^schema-[0-9a-f]+$/);
   assert.ok(Array.from(form.fields).some((field) => field.type === 'PLANNED_DISPLAY'));
+  assert.deepStrictEqual(
+    Array.from(form.context, (detail) => ({ name: detail.name, value: detail.value })),
+    [{ name: 'Item', value: 'Item A' }]
+  );
   context.formatResult = original;
 });
 
@@ -434,12 +450,133 @@ test('self-contained workflow TAT matches office-hours, week-off and holiday rul
   );
 });
 
+test('server rejects stale schemas and newly-required FILE fields before writing', () => {
+  cache.clear();
+  const before = context.wfGetStepForm(masterUrl, 'MASTER', 'DROPDPWN', 'Flow A', 'Step 1', 8, 'STEPS');
+  assert.strictEqual(before.success, true);
+  assert.match(before.schemaVersion, /^schema-/);
+
+  const originalType = targetSheet.valueAt(6, 4);
+  const originalName = targetSheet.valueAt(7, 4);
+  const originalAnswer = targetSheet.valueAt(8, 4);
+  const originalActual = targetSheet.valueAt(8, 3);
+  targetSheet.setValueAt(6, 4, 'FILE');
+  targetSheet.setValueAt(7, 4, 'Proof "Image"');
+
+  const current = context.wfGetStepForm(masterUrl, 'MASTER', 'DROPDPWN', 'Flow A', 'Step 1', 8, 'STEPS');
+  assert.strictEqual(current.success, true);
+  assert.notStrictEqual(current.schemaVersion, before.schemaVersion);
+  assert.ok(Array.from(current.fields).some((field) => field.name === 'Proof "Image"' && field.type === 'FILE'));
+
+  const stale = context.wfSubmitStep(
+    masterUrl, 'MASTER', 'STEPS', 'Flow A', 'Step 1', 8,
+    { Note: 'must not write' }, {}, 'USER1', before.schemaVersion
+  );
+  assert.strictEqual(stale.success, false);
+  assert.strictEqual(stale.code, 'FORM_SCHEMA_OUTDATED');
+  assert.strictEqual(targetSheet.valueAt(8, 4), originalAnswer);
+  assert.strictEqual(targetSheet.valueAt(8, 3), originalActual);
+
+  const missingFile = context.wfSubmitStep(
+    masterUrl, 'MASTER', 'STEPS', 'Flow A', 'Step 1', 8,
+    {}, {}, 'USER1', current.schemaVersion
+  );
+  assert.strictEqual(missingFile.success, false);
+  assert.strictEqual(missingFile.code, 'FILE_UPLOAD_REQUIRED');
+  assert.match(missingFile.message, /Proof "Image"/);
+  assert.strictEqual(targetSheet.valueAt(8, 3), originalActual);
+
+  const originalPlannedType = targetSheet.valueAt(6, 2);
+  const originalPlannedName = targetSheet.valueAt(7, 2);
+  const originalPlannedValue = targetSheet.valueAt(8, 2);
+  targetSheet.setValueAt(6, 2, 'TEXT');
+  targetSheet.setValueAt(7, 2, 'Comment');
+  const malformedSchema = context.wfGetStepForm(masterUrl, 'MASTER', 'DROPDPWN', 'Flow A', 'Step 1', 8, 'STEPS');
+  const malformedFile = context.wfSubmitStep(
+    masterUrl, 'MASTER', 'STEPS', 'Flow A', 'Step 1', 8,
+    { Comment: 'must not be partially written' },
+    { 'Proof "Image"': [{ base64: 'not valid base64', fileName: 'proof.txt', mimeType: 'text/plain' }] },
+    'USER1', malformedSchema.schemaVersion
+  );
+  assert.strictEqual(malformedFile.success, false);
+  assert.strictEqual(malformedFile.code, 'FILE_UPLOAD_INVALID');
+  assert.strictEqual(targetSheet.valueAt(8, 2), originalPlannedValue);
+  assert.strictEqual(targetSheet.valueAt(8, 3), originalActual);
+
+  targetSheet.setValueAt(6, 2, originalPlannedType);
+  targetSheet.setValueAt(7, 2, originalPlannedName);
+  targetSheet.setValueAt(6, 4, originalType);
+  targetSheet.setValueAt(7, 4, originalName);
+  cache.clear();
+});
+
+test('form schema and dropdown options use cache on repeated loads', () => {
+  cache.clear();
+  openCount = 0;
+  const first = context.wfGetStepForm(masterUrl, 'MASTER', 'DROPDPWN', 'Flow A', 'Step 2', 9, 'STEPS');
+  assert.strictEqual(first.success, true);
+  const firstReads = openCount;
+  const second = context.wfGetStepForm(masterUrl, 'MASTER', 'DROPDPWN', 'Flow A', 'Step 2', 9, 'STEPS');
+  assert.strictEqual(second.success, true);
+  const secondReads = openCount - firstReads;
+  assert.strictEqual(
+    JSON.stringify(Array.from(second.fields, (field) => Array.from(field.options || []))),
+    JSON.stringify(Array.from(first.fields, (field) => Array.from(field.options || [])))
+  );
+  assert.ok(secondReads < firstReads, 'expected cached schema/dropdown load to use fewer spreadsheet opens');
+});
+
+test('server rechecks live dropdown options before any write', () => {
+  cache.clear();
+  const before = context.wfGetStepForm(masterUrl, 'MASTER', 'DROPDPWN', 'Flow A', 'Step 2', 9, 'STEPS');
+  const originalOption = dropdownSheet.valueAt(3, 1);
+  const originalResult = targetSheet.valueAt(9, 7);
+  const originalActual = targetSheet.valueAt(9, 6);
+  dropdownSheet.setValueAt(3, 1, 'On Hold');
+
+  const stale = context.wfSubmitStep(
+    masterUrl, 'MASTER', 'STEPS', 'Flow A', 'Step 2', 9,
+    { Result: 'Rejected' }, {}, 'USER1', before.schemaVersion
+  );
+  assert.strictEqual(stale.success, false);
+  assert.strictEqual(stale.code, 'FORM_SCHEMA_OUTDATED');
+  assert.strictEqual(targetSheet.valueAt(9, 7), originalResult);
+  assert.strictEqual(targetSheet.valueAt(9, 6), originalActual);
+
+  const current = context.wfGetStepForm(masterUrl, 'MASTER', 'DROPDPWN', 'Flow A', 'Step 2', 9, 'STEPS');
+  assert.notStrictEqual(current.schemaVersion, before.schemaVersion);
+  const invalid = context.wfSubmitStep(
+    masterUrl, 'MASTER', 'STEPS', 'Flow A', 'Step 2', 9,
+    { Result: 'Rejected' }, {}, 'USER1', current.schemaVersion
+  );
+  assert.strictEqual(invalid.success, false);
+  assert.strictEqual(invalid.code, 'INVALID_FORM_OPTION');
+  assert.strictEqual(targetSheet.valueAt(9, 7), originalResult);
+  assert.strictEqual(targetSheet.valueAt(9, 6), originalActual);
+
+  dropdownSheet.setValueAt(3, 1, originalOption);
+  cache.clear();
+
+  const restored = context.wfGetStepForm(masterUrl, 'MASTER', 'DROPDPWN', 'Flow A', 'Step 2', 9, 'STEPS');
+  const trimmed = context.wfSubmitStep(
+    masterUrl, 'MASTER', 'STEPS', 'Flow A', 'Step 2', 9,
+    { Result: '  Approved  ' }, {}, 'USER1', restored.schemaVersion
+  );
+  assert.strictEqual(trimmed.success, true, trimmed.message);
+  assert.strictEqual(targetSheet.valueAt(9, 7), 'Approved');
+  targetSheet.setValueAt(9, 7, originalResult);
+  targetSheet.setValueAt(9, 6, originalActual);
+  cache.clear();
+});
+
 test('edit/submit writes fields, Actual and next Planned without calculateTAT global', () => {
   const homeKey = context.fmsCacheKey(['home', 'USER1']);
   cache.set(homeKey, JSON.stringify({ success: true, stale: true }));
+  const form = context.wfGetStepForm(masterUrl, 'MASTER', 'DROPDPWN', 'Flow A', 'Step 1', 8, 'STEPS');
+  assert.strictEqual(form.success, true);
   const result = context.wfSubmitStep(
     masterUrl, 'MASTER', 'STEPS', 'Flow A', 'Step 1', 8,
-    { Note: 'Edited from form' }, {}, 'USER1'
+    { Note: 'Edited from form' }, {}, 'USER1', form.schemaVersion
   );
   assert.strictEqual(result.success, true, result.message);
   assert.strictEqual(targetSheet.valueAt(8, 4), 'Edited from form');
@@ -508,6 +645,136 @@ test('client renders one-line numeric state chips in a compact Steps column', ()
   assert.match(html, /chip-done[^>]*>2<\/span>/);
   assert.match(html, /chip-locked[^>]*>3<\/span>/);
   assert.match(html, /data-col="__action" style="width:78px/);
+  assert.strictEqual((html.match(/role="separator"/g) || []).length, 3);
+  assert.strictEqual((html.match(/ondblclick="autoFitColumn\(/g) || []).length, 3);
+  assert.match(html, /Drag to resize · Double-click to Auto Fit/);
+});
+
+test('every Step/Table column has visible resize grips, Auto Fit and persisted widths', () => {
+  const fms = clientContext.FMS;
+  clientStorage.clear();
+  fms.columnPrefs = {};
+  fms.columnPrefsLoaded = false;
+  clientContext.FMS_SESSION = { userName: 'USER1' };
+  fms.viewMode = 'step';
+  fms.currentHeader = 'Flow A';
+  fms.currentStep = 'Review';
+  fms.table.cacheKey = 'Flow A|||Review';
+  fms.table.columns = ['Short', 'Long description'];
+  fms.table.columnTypes = ['TEXT', 'TEXT'];
+  fms.table.columnGroups = [];
+  fms.table.lockedCols = [];
+  fms.table.hiddenCols = {};
+  fms.table.colWidths = {};
+  fms.table.columnPanelOpen = false;
+  fms.table.filterStatus = 'all';
+  fms.table.globalSearch = '';
+  fms.table.colSearch = {};
+  fms.table.sortCol = null;
+  fms.table.page = 1;
+  fms.table.pageSize = 50;
+  fms.table.steps = [];
+  fms.table.rows = [{ row: 8, status: 'pending', overdue: false, cells: ['A', 'A substantially longer value for Auto Fit'] }];
+
+  clientContext.renderDataTable('Flow A', 'Review');
+  const stepHtml = tableContainerElement.innerHTML;
+  assert.strictEqual((stepHtml.match(/role="separator"/g) || []).length, 4);
+  assert.strictEqual((stepHtml.match(/ondblclick="autoFitColumn\(/g) || []).length, 4);
+  assert.match(stepHtml, />Action<span class="col-resize-handle col-resize-handle-left"/);
+
+  const originalRerender = clientContext.rerenderCurrentTable;
+  clientContext.rerenderCurrentTable = function() {};
+  const event = { cancelable: true, preventDefault() {}, stopPropagation() {} };
+  clientContext.autoFitAllColumns(event);
+  assert.ok(fms.table.colWidths.__serial >= 40);
+  assert.ok(fms.table.colWidths.__action >= 72);
+  assert.ok(fms.table.colWidths[1] > fms.table.colWidths[0]);
+  assert.ok(fms.table.colWidths[1] <= 600);
+
+  fms.viewMode = 'table';
+  fms.table.steps = Array.from({ length: 16 }, (_, index) => ({ step: 'Step ' + (index + 1), order: index + 1 }));
+  const manyStepsWidth = clientContext.measureAutoFitColumn('__action');
+  assert.ok(manyStepsWidth > 320, 'Auto Fit must fit 14+ nowrap step chips');
+  assert.ok(manyStepsWidth <= 800);
+  fms.table.steps = Array.from({ length: 40 }, (_, index) => ({ step: 'Step ' + (index + 1), order: index + 1 }));
+  const fortyStepsWidth = clientContext.measureAutoFitColumn('__action');
+  assert.ok(fortyStepsWidth > 800, 'Auto Fit ceiling must grow with every nowrap step chip');
+  assert.strictEqual(fortyStepsWidth, clientContext.compactStepsColumnWidth());
+  fms.viewMode = 'step';
+  fms.table.steps = [];
+
+  fms.table.columns = ['Link'];
+  fms.table.rows = [{ row: 8, status: 'pending', overdue: false, cells: ['https://example.com/file'] }];
+  fms.currentFontSize = 'medium';
+  const mediumLinkWidth = clientContext.measureAutoFitColumn(0);
+  fms.currentFontSize = 'large';
+  const largeLinkWidth = clientContext.measureAutoFitColumn(0);
+  assert.ok(largeLinkWidth > mediumLinkWidth, 'Auto Fit must respect A++ link typography');
+  fms.currentFontSize = 'medium';
+
+  clientContext.setColumnWidth(0, 287);
+  assert.strictEqual(fms.table.colWidths[0], 287);
+  const stored = JSON.parse(clientStorage.get('fms_column_prefs_v2'));
+  const scoped = stored['user1|||Flow A|||Review'];
+  assert.ok(scoped, 'missing user/view-scoped column preferences');
+  assert.strictEqual(scoped.colWidths[0], 287);
+  assert.strictEqual(scoped.colWidths.__serial, fms.table.colWidths.__serial);
+  assert.strictEqual(scoped.colWidths.__action, fms.table.colWidths.__action);
+  clientContext.rerenderCurrentTable = originalRerender;
+
+  const styles = htmlSource['Styles.html'];
+  assert.match(styles, /\.col-resize-handle\s*\{[\s\S]*?width:\s*12px/);
+  assert.match(styles, /\.col-resize-handle::before/);
+  assert.match(styles, /grid-template-columns:\s*repeat\(3/);
+  assert.match(htmlSource['Scripts.html'], /Auto Fit All/);
+  assert.match(htmlSource['Scripts.html'], /class="column-width-autofit"/);
+});
+
+test('cell links and quote-bearing form context are HTML-attribute safe', () => {
+  const good = clientContext.renderCellValue('https://example.com/file?a=1&b=2');
+  assert.match(good, /^<a href="https:\/\/example\.com\/file\?a=1&amp;b=2"/);
+  assert.match(good, /rel="noopener noreferrer"/);
+
+  const quoteBearing = clientContext.renderCellValue('https://example.com/" onclick="alert(1)');
+  assert.doesNotMatch(quoteBearing, /<a\s/);
+  assert.match(quoteBearing, /&quot;/);
+  assert.doesNotMatch(clientContext.renderCellValue('javascript:alert(1)'), /<a\s/);
+  assert.strictEqual(clientContext.safeHttpUrl('http://%'), null);
+  assert.strictEqual(clientContext.autoFitDisplayText('http://%'), 'http://%');
+
+  const contextHtml = clientContext.renderFormContextHtml([
+    { name: 'Order "ID"', value: 'Customer "A"' }
+  ], 8);
+  assert.match(contextHtml, /Order &quot;ID&quot;/);
+  assert.match(contextHtml, /title="Customer &quot;A&quot;"/);
+});
+
+test('late submit responses cannot target a newly opened popup generation', () => {
+  const fms = clientContext.FMS;
+  fms.currentFormHeader = 'Flow A';
+  fms.currentFormStep = 'Review';
+  fms.currentFormRow = 8;
+  fms.currentFormSchemaVersion = 'schema-new';
+  fms.currentFormGeneration = 12;
+  assert.strictEqual(clientContext.isSubmittedFormStillCurrent('Flow A', 'Review', 8, 'schema-old', 12), false);
+  assert.strictEqual(clientContext.isSubmittedFormStillCurrent('Flow A', 'Review', 8, 'schema-new', 11), false);
+  assert.strictEqual(clientContext.isSubmittedFormStillCurrent('Flow A', 'Review', 8, 'schema-new', 12), true);
+
+  fms.formFetchLatest = {};
+  fms.formFetchInFlight = {};
+  fms.formFetchSequence = 0;
+  const firstFetch = clientContext.beginFormFetch('Flow A|||Review');
+  const newerFetch = clientContext.beginFormFetch('Flow A|||Review');
+  assert.strictEqual(clientContext.completeLatestFormFetch('Flow A|||Review', firstFetch), false);
+  assert.strictEqual(fms.formFetchInFlight['Flow A|||Review'], true);
+  assert.strictEqual(clientContext.completeLatestFormFetch('Flow A|||Review', newerFetch), true);
+  assert.strictEqual(fms.formFetchInFlight['Flow A|||Review'], undefined);
+
+  fms.currentFormHeader = null;
+  fms.currentFormStep = null;
+  fms.currentFormRow = null;
+  fms.currentFormSchemaVersion = '';
+  fms.currentFormGeneration = 0;
 });
 
 test('client optimistic completion updates both views and can roll back', () => {
@@ -535,6 +802,84 @@ test('client optimistic completion updates both views and can roll back', () => 
   assert.strictEqual(stepRow.overdue, true);
   assert.strictEqual(multiRow.steps[0].status, 'pending');
   assert.strictEqual(multiRow.steps[1].status, 'locked');
+});
+
+test('form cache derives order context and planned date directly from the loaded table row', () => {
+  const fms = clientContext.FMS;
+  fms.tableCache = {
+    'Flow A|||Step 1': {
+      columns: ['Order ID', 'Customer', 'Planned', 'Actual', 'Note'],
+      baseColCount: 2,
+      rows: [{ row: 18, cells: ['ORD-1042', 'Sample Customer', '28 Jul 26 15:00:00', '', ''], status: 'pending' }]
+    }
+  };
+  fms.multiTableCache = {};
+  const snapshot = clientContext.getCachedFormSnapshot('Flow A', 'Step 1', 18);
+  assert.deepStrictEqual(
+    Array.from(snapshot.context, (detail) => ({ name: detail.name, value: detail.value })),
+    [
+      { name: 'Order ID', value: 'ORD-1042' },
+      { name: 'Customer', value: 'Sample Customer' }
+    ]
+  );
+  assert.strictEqual(snapshot.planned, '28 Jul 26 15:00:00');
+  assert.strictEqual(
+    clientContext.formIdentitySubtitle('Flow A', snapshot.context, 18),
+    'Order ID: ORD-1042  •  Flow A  •  Record #18'
+  );
+
+  clientContext.cacheFormSchemasFromTable('Flow A', 'Step 1', {
+    formSchema: [
+      { name: 'Planned', type: 'PLANNED_DISPLAY', value: '', options: [] },
+      { name: 'Payment Proof Image', type: 'FILE', options: [] }
+    ],
+    formSchemaVersion: 'schema-test-step-1'
+  });
+  assert.strictEqual(clientContext.getFormCacheEntry('Flow A|||Step 1').fields.length, 2);
+  assert.strictEqual(clientContext.getFormCacheEntry('Flow A|||Step 1').version, 'schema-test-step-1');
+  assert.strictEqual(clientContext.isFormCacheFresh(clientContext.getFormCacheEntry('Flow A|||Step 1')), true);
+
+  const blankRowFields = clientContext.fieldsWithSnapshot([
+    { name: 'Planned', type: 'PLANNED_DISPLAY', value: 'OLD ROW DATE', options: [] }
+  ], { context: [], planned: '' });
+  assert.strictEqual(blankRowFields[0].value, '', 'empty Planned must not reuse another row value');
+  clientContext.storeFormStructureEntry('Flow A|||Step 1', [
+    { name: 'Planned', type: 'PLANNED_DISPLAY', value: 'ROW-SPECIFIC DATE', options: [] }
+  ], 'schema-test-step-1', Date.now());
+  assert.strictEqual(clientContext.getFormCacheEntry('Flow A|||Step 1').fields[0].value, '');
+
+  fms.currentFormHeader = 'Flow A';
+  fms.currentFormStep = 'Step 1';
+  fms.formSchemaOutdated = false;
+  const schemaChanged = clientContext.cacheFormSchemasFromTable('Flow A', 'Step 1', {
+    formSchema: [
+      { name: 'Planned', type: 'PLANNED_DISPLAY', value: '', options: [] },
+      { name: 'New proof', type: 'FILE', options: [] }
+    ],
+    formSchemaVersion: 'schema-test-step-2'
+  });
+  assert.strictEqual(schemaChanged, true);
+  assert.strictEqual(fms.formSchemaOutdated, true, 'schema-only table refresh must invalidate an open form');
+  fms.currentFormHeader = null;
+  fms.currentFormStep = null;
+  fms.formSchemaOutdated = false;
+});
+
+test('modal stays clear behind the table and uses the polished context layout', () => {
+  const styles = htmlSource['Styles.html'];
+  const modalCss = styles.slice(styles.indexOf('/* ===== MODAL / POPUP FORM ===== */'), styles.indexOf('/* ===== DATA TABLE'));
+  const scripts = htmlSource['Scripts.html'];
+  assert.doesNotMatch(modalCss, /backdrop-filter:\s*blur/);
+  assert.match(modalCss, /backdrop-filter:\s*none\s*!important/);
+  assert.match(modalCss, /\.form-context-grid/);
+  assert.match(modalCss, /\.form-entry-card/);
+  assert.match(scripts, /Order details/);
+  assert.match(scripts, /function formIdentitySubtitle/);
+  assert.match(scripts, /updateModalIdentity\(headerName, stepName, rowNumber, snapshot\.context\)/);
+  assert.match(scripts, /FORM_SCHEMA_CACHE_MS = 30 \* 60 \* 1000/);
+  assert.match(scripts, /cacheFormSchemasFromTable/);
+  assert.match(scripts, /<div class="modal-footer"><div class="form-msg"/);
+  assert.doesNotMatch(scripts, /Loading form\.\.\./);
 });
 
 test('client has guarded login RPC and compact numeric step chips', () => {

@@ -19,6 +19,8 @@
 // to change.
 // ============================================
 
+var WF_BUILD_ID = '2026-07-22-column-width-2';
+
 var WF_STEP_NAME_ROW = 2;   // Row containing the exact step name text
 var WF_TYPE_ROW = 6;        // Row containing data type per column
 var WF_FIELD_NAME_ROW = 7;  // Row containing field/question name per column
@@ -622,7 +624,23 @@ function getStepTableData(masterSheetUrl, masterSheetName, stepsSheetName, heade
       rows.push({ row: r, status: status, overdue: isOverdue, cells: cells });
     }
 
-    return { success: true, columns: columnNames, columnTypes: columnTypes, defaultHiddenCols: defaultHiddenCols, rows: rows };
+    var schemaEntry = getCachedStepFormSchema(
+      masterSheetUrl,
+      (typeof FMS_DROPDOWN_SHEET !== 'undefined' ? FMS_DROPDOWN_SHEET : 'DROPDPWN'),
+      target,
+      stepName,
+      currentFields
+    );
+    return {
+      success: true,
+      columns: columnNames,
+      columnTypes: columnTypes,
+      defaultHiddenCols: defaultHiddenCols,
+      baseColCount: baseColCount,
+      formSchema: schemaEntry.fields,
+      formSchemaVersion: schemaEntry.version,
+      rows: rows
+    };
 
   } catch (e) {
     return { success: false, message: 'Error: ' + e.message };
@@ -641,7 +659,62 @@ function getStepTableData(masterSheetUrl, masterSheetName, stepsSheetName, heade
  * Others    -> editable inputs; DROPDOWN/CHECKBOX types get their options
  *              from the DROPDOWN sheet (header row split by comma)
  */
-function getStepFormFields(masterSheetUrl, masterSheetName, dropdownSheetName, header, stepName, rowNumber) {
+function wfFormSchemaVersion(fields) {
+  var canonical = JSON.stringify((fields || []).map(function (field) {
+    return { name: field.name, type: field.type, options: field.options || [] };
+  }));
+  var hash = 2166136261;
+  for (var i = 0; i < canonical.length; i++) {
+    hash ^= canonical.charCodeAt(i);
+    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+  }
+  return 'schema-' + (hash >>> 0).toString(16);
+}
+
+function getCachedStepFormSchema(masterSheetUrl, dropdownSheetName, target, stepName, fields, forceFresh) {
+  // Include the live Row 6/7 field configuration in the cache key. If a
+  // question is added, removed or changes type, the old cached schema can
+  // never mask it for the remainder of CacheService's TTL.
+  var sourceVersion = wfFormSchemaVersion((fields || []).map(function (field) {
+    return { name: field.name, type: field.type, options: [] };
+  }));
+  var key = fmsCacheKey(['form-schema', target.sheetUrl, target.sheetName, stepName, dropdownSheetName, sourceVersion]);
+  var cached = forceFresh ? null : fmsCacheGet(key);
+  if (cached && cached.fields) {
+    return { fields: cached.fields, version: cached.version || wfFormSchemaVersion(cached.fields) };
+  }
+
+  var dropdownMap = null;
+  var needsDropdowns = fields.some(function (field) {
+    var type = String(field.type || '').toUpperCase();
+    return type.indexOf('DROPDOWN') !== -1 || type.indexOf('CHECKBOX') !== -1;
+  });
+  if (needsDropdowns) dropdownMap = getDropdownOptionsMap(masterSheetUrl, dropdownSheetName, forceFresh);
+
+  var schema = [];
+  fields.forEach(function (f) {
+    var nameLower = f.name.toLowerCase();
+    if (nameLower.indexOf('actual') !== -1 || isAuditTrailField(f.name)) return;
+
+    if (nameLower.indexOf('planned') !== -1) {
+      schema.push({ name: f.name, type: 'PLANNED_DISPLAY', value: '', options: [] });
+      return;
+    }
+    if (!f.type) return;
+
+    var field = { name: f.name, type: f.type.toUpperCase(), options: [] };
+    if (field.type.indexOf('DROPDOWN') !== -1 || field.type.indexOf('CHECKBOX') !== -1) {
+      field.options = (dropdownMap && dropdownMap[f.name.trim().toUpperCase()]) || [];
+    }
+    schema.push(field);
+  });
+
+  var version = wfFormSchemaVersion(schema);
+  fmsCacheSet(key, { fields: schema, version: version });
+  return { fields: schema, version: version };
+}
+
+function getStepFormFields(masterSheetUrl, masterSheetName, dropdownSheetName, header, stepName, rowNumber, stepsSheetName) {
   try {
     var target = getTargetSheetInfo(masterSheetUrl, masterSheetName, header);
     if (!target) return { success: false, message: 'Target sheet info not found', fields: [] };
@@ -654,37 +727,54 @@ function getStepFormFields(masterSheetUrl, masterSheetName, dropdownSheetName, h
     if (!range) return { success: false, message: 'Step not found in target sheet', fields: [] };
 
     var fields = getStepFields(sheet, range);
-    var formFields = [];
-
-    fields.forEach(function (f) {
-      var nameLower = f.name.toLowerCase();
-      if (nameLower.indexOf('actual') !== -1) return; // never shown
-      if (isAuditTrailField(f.name)) return; // "Modified By/At" are automatic - never a form question
-
-      if (nameLower.indexOf('planned') !== -1) {
-        // Always shown, always non-editable - regardless of whether Row 6
-        // has a Data Type for it (Planned is auto-computed via TAT).
-        formFields.push({
-          name: f.name,
-          type: 'PLANNED_DISPLAY',
-          value: formatDateSafe(sheet.getRange(rowNumber, f.col).getValue()),
-          options: []
+    var schemaEntry = getCachedStepFormSchema(masterSheetUrl, dropdownSheetName, target, stepName, fields);
+    var formFields = schemaEntry.fields.map(function (field) {
+      var clone = {};
+      for (var key in field) clone[key] = field[key];
+      if (clone.type === 'PLANNED_DISPLAY') {
+        var plannedCol = null;
+        fields.forEach(function (sourceField) {
+          if (sourceField.name.toLowerCase().indexOf('planned') !== -1) plannedCol = sourceField.col;
         });
-        return;
+        clone.value = plannedCol ? formatDateSafe(sheet.getRange(rowNumber, plannedCol).getValue()) : '';
       }
-
-      // Any other field with NO Data Type configured in Row 6 is treated
-      // as "not set up yet" and must not appear in the form at all.
-      if (!f.type) return;
-
-      var field = { name: f.name, type: f.type.toUpperCase(), options: [] };
-      if (field.type.indexOf('DROPDOWN') !== -1 || field.type.indexOf('CHECKBOX') !== -1) {
-        field.options = getDropdownOptions(masterSheetUrl, dropdownSheetName, f.name);
-      }
-      formFields.push(field);
+      return clone;
     });
 
-    return { success: true, fields: formFields };
+    // Basic order/record context: only the identifying columns that appear
+    // before the FIRST workflow step. Never include fields from another
+    // step. Row 7 supplies dynamic labels, so this works for Order ID,
+    // customer, style, vendor, amount, etc. without hard-coded names.
+    var contextFields = [];
+    try {
+      var stepsSs = SpreadsheetApp.openByUrl(masterSheetUrl);
+      var allSteps = getAllStepsForHeader(stepsSs, stepsSheetName || FMS_STEPS_SHEET, header);
+      var firstStepRange = allSteps.length ? findStepColumnRange(sheet, allSteps[0]) : null;
+      var baseColCount = firstStepRange ? Math.max(0, firstStepRange.startCol - 1) : 0;
+      if (baseColCount > 0) {
+        var baseNames = sheet.getRange(WF_FIELD_NAME_ROW, 1, 1, baseColCount).getValues()[0];
+        var baseValues = sheet.getRange(rowNumber, 1, 1, baseColCount).getValues()[0];
+        for (var baseIndex = 0; baseIndex < baseColCount; baseIndex++) {
+          var contextName = String(baseNames[baseIndex]).trim() || ('Detail ' + (baseIndex + 1));
+          var contextValue = formatDateSafe(baseValues[baseIndex]);
+          if (contextValue !== '') contextFields.push({ name: contextName, value: contextValue });
+        }
+      }
+    } catch (contextError) {
+      // Context improves clarity but is not required to complete the step.
+      // Never block the editable form if these optional details cannot load.
+      contextFields = [];
+    }
+
+    return {
+      success: true,
+      fields: formFields,
+      schemaVersion: schemaEntry.version,
+      context: contextFields,
+      rowNumber: rowNumber,
+      header: header,
+      stepName: stepName
+    };
 
   } catch (e) {
     return { success: false, message: 'Error: ' + e.message, fields: [] };
@@ -696,36 +786,42 @@ function getStepFormFields(masterSheetUrl, masterSheetName, dropdownSheetName, h
  * (e.g. "Vendor Name A,Final Vendor name") meaning multiple field names
  * share the SAME options column. Row 2+ = option values for that column.
  */
-function getDropdownOptions(masterSheetUrl, dropdownSheetName, fieldName) {
+function getDropdownOptionsMap(masterSheetUrl, dropdownSheetName, forceFresh) {
+  var cacheKey = fmsCacheKey(['dropdown-map', masterSheetUrl, dropdownSheetName]);
+  var cached = forceFresh ? null : fmsCacheGet(cacheKey);
+  if (cached && cached.options) return cached.options;
+
+  var optionMap = {};
   try {
     var ss = SpreadsheetApp.openByUrl(masterSheetUrl);
     var sheet = ss.getSheetByName(dropdownSheetName);
-    if (!sheet) return [];
-
+    if (!sheet) return optionMap;
     var lastCol = sheet.getLastColumn();
     var lastRow = sheet.getLastRow();
-    if (lastCol < 1 || lastRow < 2) return [];
+    if (lastCol < 1 || lastRow < 2) return optionMap;
 
-    var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
-    var targetCol = -1;
-
-    for (var c = 0; c < headers.length; c++) {
-      var parts = String(headers[c]).split(',').map(function (p) { return p.trim().toUpperCase(); });
-      if (parts.indexOf(fieldName.trim().toUpperCase()) !== -1) { targetCol = c + 1; break; }
+    var data = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+    for (var col = 0; col < lastCol; col++) {
+      var options = [];
+      for (var row = 1; row < data.length; row++) {
+        var value = String(data[row][col]).trim();
+        if (value) options.push(value);
+      }
+      String(data[0][col]).split(',').forEach(function (heading) {
+        var normalized = heading.trim().toUpperCase();
+        if (normalized) optionMap[normalized] = options;
+      });
     }
-    if (targetCol === -1) return [];
-
-    var values = sheet.getRange(2, targetCol, lastRow - 1, 1).getValues();
-    var options = [];
-    values.forEach(function (row) {
-      var v = String(row[0]).trim();
-      if (v) options.push(v);
-    });
-    return options;
-
   } catch (e) {
-    return [];
+    return {};
   }
+  fmsCacheSet(cacheKey, { options: optionMap });
+  return optionMap;
+}
+
+function getDropdownOptions(masterSheetUrl, dropdownSheetName, fieldName) {
+  var optionMap = getDropdownOptionsMap(masterSheetUrl, dropdownSheetName);
+  return optionMap[fieldName.trim().toUpperCase()] || [];
 }
 
 // ============================================
@@ -859,7 +955,7 @@ function wfNextWorkingDayStart_(currentDate, officeStart, weekOffDays, holidayKe
  *
  * fileUploads: { fieldName: [ {base64, fileName, mimeType}, ... ], ... }
  */
-function submitStepData(masterSheetUrl, masterSheetName, stepsSheetName, header, stepName, rowNumber, formValues, fileUploads, submittedByUser) {
+function submitStepData(masterSheetUrl, masterSheetName, stepsSheetName, header, stepName, rowNumber, formValues, fileUploads, submittedByUser, clientSchemaVersion) {
   try {
     var target = getTargetSheetInfo(masterSheetUrl, masterSheetName, header);
     if (!target) return { success: false, message: 'Target sheet info not found' };
@@ -872,6 +968,96 @@ function submitStepData(masterSheetUrl, masterSheetName, stepsSheetName, header,
     if (!range) return { success: false, message: 'Step columns not found' };
 
     var fields = getStepFields(sheet, range);
+    var currentSchema = getCachedStepFormSchema(
+      masterSheetUrl,
+      (typeof FMS_DROPDOWN_SHEET !== 'undefined' ? FMS_DROPDOWN_SHEET : 'DROPDPWN'),
+      target,
+      stepName,
+      fields,
+      true
+    );
+
+    // Never write answers collected from an old cached form. This check is
+    // server-side because a user can click Submit before the client's silent
+    // background validation finishes. The live field configuration is part
+    // of the schema cache key, so newly-added FILE questions are detected.
+    if (!clientSchemaVersion || clientSchemaVersion !== currentSchema.version) {
+      return {
+        success: false,
+        code: 'FORM_SCHEMA_OUTDATED',
+        message: 'This step form changed after it was opened. Please close and reopen the form, then submit again.'
+      };
+    }
+
+    var invalidOptionFields = [];
+    currentSchema.fields.forEach(function (field) {
+      var type = String(field.type || '').toUpperCase();
+      if (type.indexOf('DROPDOWN') === -1 && type.indexOf('CHECKBOX') === -1) return;
+      var submitted = formValues && formValues.hasOwnProperty(field.name)
+        ? String(formValues[field.name]).trim()
+        : '';
+      if (submitted && (field.options || []).indexOf(submitted) === -1) invalidOptionFields.push(field.name);
+      if (formValues && formValues.hasOwnProperty(field.name)) formValues[field.name] = submitted;
+    });
+    if (invalidOptionFields.length) {
+      return {
+        success: false,
+        code: 'INVALID_FORM_OPTION',
+        message: 'Select a current option for: ' + invalidOptionFields.join(', ')
+      };
+    }
+
+    var missingFileFields = [];
+    var invalidFileFields = [];
+    var fileFields = [];
+    currentSchema.fields.forEach(function (field) {
+      if (String(field.type || '').toUpperCase().indexOf('FILE') === -1) return;
+      fileFields.push(field);
+      var files = fileUploads && fileUploads[field.name];
+      if (Object.prototype.toString.call(files) !== '[object Array]' || !files.length) {
+        missingFileFields.push(field.name);
+        return;
+      }
+      files.forEach(function (file) {
+        var base64 = file && typeof file.base64 === 'string' ? file.base64 : '';
+        var fileName = file && typeof file.fileName === 'string' ? file.fileName.trim() : '';
+        var mimeType = file && typeof file.mimeType === 'string' ? file.mimeType.trim() : '';
+        var base64LooksValid = !!base64 && base64.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/.test(base64);
+        if (!fileName || !mimeType || !base64LooksValid) {
+          invalidFileFields.push(field.name);
+          return;
+        }
+        try {
+          Utilities.base64Decode(base64);
+        } catch (decodeError) {
+          invalidFileFields.push(field.name);
+        }
+      });
+    });
+    if (missingFileFields.length) {
+      return {
+        success: false,
+        code: 'FILE_UPLOAD_REQUIRED',
+        message: 'Upload required for: ' + missingFileFields.join(', ')
+      };
+    }
+    if (invalidFileFields.length) {
+      return {
+        success: false,
+        code: 'FILE_UPLOAD_INVALID',
+        message: 'Choose the file again for: ' + invalidFileFields.join(', ')
+      };
+    }
+
+    // Upload every validated file before mutating any Sheet cell. A Drive
+    // failure can therefore never leave ordinary answers partially written.
+    var stagedFileUrls = {};
+    fileFields.forEach(function (field) {
+      stagedFileUrls[field.name] = fileUploads[field.name].map(function (file) {
+        return uploadFileToDrive(file.base64, file.fileName, file.mimeType);
+      });
+    });
+
     var pa = getPlannedActualCols(fields);
 
     // Audit trail columns ("Modified By" / "Modified At") - OPTIONAL. If
@@ -892,13 +1078,8 @@ function submitStepData(masterSheetUrl, masterSheetName, stepsSheetName, header,
       if (nameLower.indexOf('modified by') !== -1 || nameLower.indexOf('modified at') !== -1) return; // written separately below
 
       if (f.type.toUpperCase().indexOf('FILE') !== -1) {
-        var files = (fileUploads && fileUploads[f.name]) || [];
-        if (files.length > 0) {
-          var urls = files.map(function (file) {
-            return uploadFileToDrive(file.base64, file.fileName, file.mimeType);
-          });
-          sheet.getRange(rowNumber, f.col).setValue(urls.join(', '));
-        }
+        var urls = stagedFileUrls[f.name] || [];
+        if (urls.length) sheet.getRange(rowNumber, f.col).setValue(urls.join(', '));
       } else if (formValues && formValues.hasOwnProperty(f.name)) {
         sheet.getRange(rowNumber, f.col).setValue(formValues[f.name]);
       }
@@ -1056,6 +1237,8 @@ function getMultiStepTableData(masterSheetUrl, masterSheetName, stepsSheetName, 
     var columnGroups = [];     // parallel: '' for base cols, else the step name
     var defaultHiddenCols = []; // audit-trail cols start hidden
     var lockedCols = [];       // Plan-date cols can NEVER be hidden (per requirement)
+    var formSchemas = {};      // stepName -> cached field schema for instant modal opening
+    var formSchemaVersions = {}; // stepName -> server schema version for safe submit validation
 
     for (var bc = 0; bc < baseColCount; bc++) {
       var bName = String(baseNameVals[bc]).trim() || ('Col ' + (bc + 1));
@@ -1082,6 +1265,15 @@ function getMultiStepTableData(masterSheetUrl, masterSheetName, stepsSheetName, 
 
       var colIdxStart = -1, colIdxEnd = -1;
       if (allowed) {
+        var stepSchemaEntry = getCachedStepFormSchema(
+          masterSheetUrl,
+          (typeof FMS_DROPDOWN_SHEET !== 'undefined' ? FMS_DROPDOWN_SHEET : 'DROPDPWN'),
+          target,
+          stepName,
+          fields
+        );
+        formSchemas[stepName] = stepSchemaEntry.fields;
+        formSchemaVersions[stepName] = stepSchemaEntry.version;
         colIdxStart = columns.length;
         for (var f = 0; f < visibleFields.length; f++) {
           var fld = visibleFields[f];
@@ -1173,6 +1365,8 @@ function getMultiStepTableData(masterSheetUrl, masterSheetName, stepsSheetName, 
       columnGroups: columnGroups,
       defaultHiddenCols: defaultHiddenCols,
       lockedCols: lockedCols,
+      formSchemas: formSchemas,
+      formSchemaVersions: formSchemaVersions,
       baseColCount: baseColCount,
       steps: stepMeta.filter(function (s) { return s.allowed; }).map(function (s) {
         return { step: s.step, order: s.order, colIdxStart: s.colIdxStart, colIdxEnd: s.colIdxEnd };
@@ -1194,12 +1388,12 @@ function wfGetPendingRows(sheetUrl, masterSheet, stepsSheet, header, stepName) {
   return getPendingRowsForStep(sheetUrl, masterSheet, stepsSheet, header, stepName);
 }
 
-function wfGetStepForm(sheetUrl, masterSheet, dropdownSheet, header, stepName, rowNumber) {
-  return getStepFormFields(sheetUrl, masterSheet, dropdownSheet, header, stepName, rowNumber);
+function wfGetStepForm(sheetUrl, masterSheet, dropdownSheet, header, stepName, rowNumber, stepsSheet) {
+  return getStepFormFields(sheetUrl, masterSheet, dropdownSheet, header, stepName, rowNumber, stepsSheet);
 }
 
-function wfSubmitStep(sheetUrl, masterSheet, stepsSheet, header, stepName, rowNumber, formValues, fileUploads, submittedByUser) {
-  return submitStepData(sheetUrl, masterSheet, stepsSheet, header, stepName, rowNumber, formValues, fileUploads, submittedByUser);
+function wfSubmitStep(sheetUrl, masterSheet, stepsSheet, header, stepName, rowNumber, formValues, fileUploads, submittedByUser, schemaVersion) {
+  return submitStepData(sheetUrl, masterSheet, stepsSheet, header, stepName, rowNumber, formValues, fileUploads, submittedByUser, schemaVersion);
 }
 
 function wfGetStepTableData(sheetUrl, masterSheet, stepsSheet, header, stepName) {

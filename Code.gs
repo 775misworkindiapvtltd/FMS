@@ -51,7 +51,7 @@ var FMS_CACHE_TTL_SECONDS = 600; // 10 minutes - matches the client's own auto-r
 // Human-readable deployment fingerprint. It is shown on the login page and
 // by fmsDiagnose(), making it immediately obvious when an old /exec version
 // or a different Apps Script project is being opened.
-var FMS_BUILD_ID = '2026-07-22-runtime-safe-2';
+var FMS_BUILD_ID = '2026-07-22-column-width-2';
 
 function fmsCacheKey(parts) {
   return 'fms_v1_' + parts.map(function (p) { return String(p); }).join('|');
@@ -178,6 +178,9 @@ function fmsGetRuntimeInfo() {
   for (var name in requiredFunctions) {
     if (requiredFunctions[name] !== 'function') missing.push(name + '()');
   }
+  if (typeof WF_BUILD_ID === 'undefined' || WF_BUILD_ID !== FMS_BUILD_ID) {
+    missing.push('WorkflowEngine.gs build mismatch (expected ' + FMS_BUILD_ID + ')');
+  }
 
   // Raw existence checks catch missing include files; evaluating both page
   // templates additionally catches broken include names/scriptlets now,
@@ -188,6 +191,18 @@ function fmsGetRuntimeInfo() {
       HtmlService.createHtmlOutputFromFile(requiredHtml[i]);
     } catch (e) {
       missing.push(requiredHtml[i] + '.html');
+    }
+  }
+  var clientBuildFiles = ['Scripts', 'Styles'];
+  for (var clientIndex = 0; clientIndex < clientBuildFiles.length; clientIndex++) {
+    var clientFile = clientBuildFiles[clientIndex];
+    try {
+      var clientSource = HtmlService.createHtmlOutputFromFile(clientFile).getContent();
+      if (clientSource.indexOf(FMS_BUILD_ID) === -1) {
+        missing.push(clientFile + '.html build mismatch (expected ' + FMS_BUILD_ID + ')');
+      }
+    } catch (clientBuildError) {
+      // The missing-file check above already provides the clearest message.
     }
   }
   var templates = ['Login', 'Dashboard'];

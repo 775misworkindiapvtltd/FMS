@@ -1,4 +1,5 @@
 <style>
+/* FMS_STYLE_BUILD_ID: 2026-07-22-column-width-2 */
 /* ============================================
    FMS - GLOBAL STYLES (Shared across pages)
    ============================================ */
@@ -430,119 +431,191 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
 .pending-loading { text-align: center; padding: 40px; color: var(--text-muted); font-size: 12px; }
 
 /* ===== MODAL / POPUP FORM ===== */
+/* Keep the table readable behind the form: dim only, NEVER blur. */
 .modal-overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 3000;
-  display: flex; align-items: center; justify-content: center; padding: 20px;
-  opacity: 0; visibility: hidden; transition: var(--transition); backdrop-filter: blur(4px);
+  position: fixed; inset: 0; background: rgba(9, 15, 30, 0.28); z-index: 3000;
+  display: flex; align-items: center; justify-content: center; padding: 18px;
+  opacity: 0; visibility: hidden; transition: opacity 0.2s ease, visibility 0.2s ease;
+  backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
 }
 .modal-overlay.active { opacity: 1; visibility: visible; }
 
 .modal-box {
-  background: var(--bg-secondary); border-radius: var(--radius-lg); border: 1px solid var(--border);
-  width: 100%; max-width: 480px; max-height: 88vh; display: flex; flex-direction: column;
-  box-shadow: var(--shadow-lg); transform: scale(0.92) translateY(20px);
-  transition: transform 0.3s ease, max-width 0.25s ease;
+  background: var(--bg-secondary); border-radius: 18px; border: 1px solid var(--border);
+  width: 100%; max-width: 680px; max-height: 92vh; display: flex; flex-direction: column;
+  overflow: hidden; box-shadow: 0 24px 70px rgba(5, 12, 28, 0.28);
+  transform: translateY(14px) scale(0.98); transition: transform 0.22s ease, max-width 0.22s ease;
 }
-.modal-overlay.active .modal-box { transform: scale(1) translateY(0); }
-
-/* When a Step's form has many questions, the modal widens and switches
-   its fields to a 2-column grid (see .form-fields-grid below) so the
-   whole form fits without the user needing to scroll to reach Submit. */
-.modal-box.modal-wide { max-width: 760px; }
+.modal-overlay.active .modal-box { transform: translateY(0) scale(1); }
+.modal-box.modal-wide { max-width: 900px; }
 
 .modal-header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 18px 20px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 15px 18px; border-bottom: 1px solid var(--border);
+  background: linear-gradient(135deg, var(--color-primary-glow), transparent 60%);
+  flex-shrink: 0;
 }
-.modal-header h3 { font-size: 15px; font-weight: 600; }
-.modal-body { flex: 1; overflow-y: auto; padding: 20px; }
-.modal-footer { padding: 16px 20px; border-top: 1px solid var(--border); display: flex; gap: 10px; }
+.modal-title-wrap { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.modal-title-wrap > div { min-width: 0; }
+.modal-step-icon {
+  width: 38px; height: 38px; display: grid; place-items: center; flex: 0 0 38px;
+  border-radius: 11px; background: var(--accent-gradient); color: #fff; font-size: 20px;
+  box-shadow: 0 7px 18px var(--color-primary-glow-strong);
+}
+.modal-header h3 {
+  margin: 0; font-size: 16px; line-height: 1.25; font-weight: 700; color: var(--text-primary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.modal-header p {
+  margin: 3px 0 0; font-size: 10.5px; color: var(--text-secondary); font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.modal-close-btn { flex: 0 0 auto; border: 1px solid var(--border); background: var(--bg-card); }
+.modal-body {
+  flex: 1; overflow-y: auto; padding: 14px 18px 16px;
+  display: flex; flex-direction: column; gap: 12px; background: var(--bg-card);
+}
 
-/* 2-column field grid - activated (via JS adding .form-fields-grid) once
-   a form has enough questions that a single column would need scrolling
-   to reach Submit. Fields that need full width (Long Text, File upload)
-   still span both columns even inside the grid. A vertical divider line
-   runs the full height between the two columns (per user request), via a
-   ::before pseudo-element positioned in the grid's middle gap column. */
+.form-context-card, .form-entry-card {
+  background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 13px;
+  padding: 13px; box-shadow: 0 2px 10px rgba(10, 20, 40, 0.04);
+}
+.form-section-heading {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-bottom: 11px;
+}
+.form-section-heading > div { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.form-section-heading .material-icons-round { font-size: 17px; color: var(--color-primary); }
+.form-section-heading strong { font-size: 12px; color: var(--text-primary); }
+.form-record-row, .form-sync-note {
+  flex: 0 0 auto; padding: 3px 7px; border-radius: 6px; background: var(--color-primary-glow);
+  color: var(--color-primary); font-size: 9.5px; font-weight: 600;
+}
+.form-sync-note { display: inline-flex; align-items: center; gap: 3px; }
+.form-sync-note .material-icons-round { font-size: 12px; }
+.form-context-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px;
+}
+.form-context-item {
+  min-width: 0; padding: 9px 10px; border: 1px solid var(--border); border-radius: 9px;
+  background: var(--bg-card);
+}
+.form-context-item > span {
+  display: block; margin-bottom: 3px; color: var(--text-muted); font-size: 9px;
+  font-weight: 600; text-transform: uppercase; letter-spacing: 0.45px;
+}
+.form-context-item > strong {
+  display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-primary); font-size: 11.5px; font-weight: 600;
+}
+.form-context-empty { padding: 9px; color: var(--text-muted); font-size: 10.5px; border-radius: 8px; background: var(--bg-card); }
+
+.modal-fields { display: block; }
 .form-fields-grid {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px;
-  position: relative;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 4px 18px; position: relative;
 }
 .form-fields-grid::before {
-  content: ''; position: absolute; top: 0; bottom: 0; left: 50%;
-  width: 1px; background: var(--border); pointer-events: none;
+  content: ''; position: absolute; top: 0; bottom: 0; left: 50%; width: 1px;
+  background: var(--border); pointer-events: none;
 }
-.form-fields-grid .form-field { margin-bottom: 12px; }
+.form-fields-grid .form-field { margin-bottom: 11px; }
 .form-fields-grid .form-field.field-span-2 { grid-column: 1 / -1; }
 
-.form-field { margin-bottom: 16px; }
+.form-field { margin-bottom: 13px; }
+.form-field:last-child { margin-bottom: 0; }
 .form-field label {
-  display: block; font-size: 11.5px; font-weight: 600; color: var(--text-secondary);
-  margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;
-  transition: color 0.2s ease;
+  display: block; font-size: 10px; font-weight: 700; color: var(--text-secondary);
+  margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.55px; transition: color 0.2s ease;
 }
-/* Once a question has been answered/filled, its label switches to the
-   accent color + a checkmark, so it's immediately obvious at a glance
-   which fields are done vs. still pending, in the whole form. */
 .form-field.field-filled label { color: var(--color-primary); }
 .form-field.field-filled label::after {
-  content: 'check_circle'; font-family: 'Material Icons Round'; font-size: 13px;
-  margin-left: 5px; vertical-align: middle; letter-spacing: 0; text-transform: none;
+  content: 'check_circle'; font-family: 'Material Icons Round'; font-size: 12px;
+  margin-left: 4px; vertical-align: -2px; letter-spacing: 0; text-transform: none;
 }
 .form-field input[type="text"],
 .form-field input[type="number"],
 .form-field textarea,
 .form-field select {
-  width: 100%; padding: 11px 13px; background: var(--bg-card); border: 1px solid var(--border);
-  border-radius: var(--radius-sm); font-size: 13px; color: var(--text-primary);
-  font-family: 'Poppins', sans-serif; outline: none; transition: var(--transition);
+  width: 100%; min-height: 40px; padding: 9px 11px; background: var(--bg-card);
+  border: 1px solid var(--border); border-radius: 9px; font-size: 12px; color: var(--text-primary);
+  font-family: 'Poppins', sans-serif; outline: none; transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
-.form-field input:focus, .form-field textarea:focus, .form-field select:focus { border-color: var(--accent); }
+.form-field input::placeholder, .form-field textarea::placeholder { color: var(--text-muted); }
+.form-field input:focus, .form-field textarea:focus, .form-field select:focus {
+  border-color: var(--color-primary); box-shadow: 0 0 0 3px var(--color-primary-glow);
+}
 .form-field textarea { resize: vertical; min-height: 70px; }
-
 .form-field .readonly-display {
-  padding: 11px 13px; background: rgba(255,171,64,0.08); border: 1px dashed var(--warning);
-  border-radius: var(--radius-sm); font-size: 12.5px; color: var(--warning); font-weight: 500;
-  display: flex; align-items: center; gap: 8px;
+  min-height: 40px; padding: 9px 11px; background: rgba(255,171,64,0.07);
+  border: 1px solid rgba(255,171,64,0.45); border-radius: 9px;
+  font-size: 11.5px; color: var(--warning); font-weight: 600;
+  display: flex; align-items: center; gap: 7px;
 }
 .form-field .readonly-display .material-icons-round { font-size: 16px; }
 
 .file-drop {
-  border: 2px dashed var(--border); border-radius: var(--radius-sm); padding: 20px;
-  text-align: center; cursor: pointer; transition: var(--transition); color: var(--text-muted); font-size: 12px;
+  min-height: 88px; border: 1.5px dashed var(--color-primary); border-radius: 10px; padding: 13px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  text-align: center; cursor: pointer; transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+  color: var(--color-primary); background: var(--color-primary-glow); font-size: 10.5px;
 }
-.file-drop:hover { border-color: var(--accent); color: var(--accent); }
+.file-drop:hover { background: var(--color-primary-glow-strong); transform: translateY(-1px); }
+.file-drop strong { font-size: 11.5px; }
+.file-upload-icon { font-size: 22px !important; }
 .file-drop input[type="file"] { display: none; }
-/* Once at least one file is uploaded for a required FILE question */
-.file-drop.file-drop-done { border-color: var(--success); color: var(--success); border-style: solid; }
+.file-drop.file-drop-done { border-color: var(--success); color: var(--success); border-style: solid; background: rgba(0,230,118,0.07); }
 .file-required-hint {
-  margin-top: 6px; font-size: 10.5px; color: var(--warning); font-weight: 500;
+  margin-top: 6px; font-size: 9.5px; color: var(--warning); font-weight: 600;
   display: flex; align-items: center; gap: 4px;
 }
-.file-list { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.file-required-hint .material-icons-round { font-size: 12px; }
+.file-list { margin-top: 7px; display: flex; flex-direction: column; gap: 5px; }
 .file-chip {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 7px 10px; background: var(--bg-card); border: 1px solid var(--border);
-  border-radius: 6px; font-size: 11px; color: var(--text-secondary);
+  padding: 6px 9px; background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 7px; font-size: 10.5px; color: var(--text-secondary);
 }
 .file-chip .remove-file { color: var(--danger); cursor: pointer; font-size: 15px; }
 
-.btn {
-  flex: 1; padding: 12px; border-radius: var(--radius-sm); border: none; cursor: pointer;
-  font-family: 'Poppins', sans-serif; font-weight: 600; font-size: 13px; transition: var(--transition);
+.form-skeleton { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.form-skeleton span { height: 58px; border-radius: 9px; background: linear-gradient(90deg, var(--bg-card), var(--bg-card-hover), var(--bg-card)); background-size: 200% 100%; animation: formShimmer 1.2s linear infinite; }
+.form-skeleton .wide { grid-column: 1 / -1; height: 82px; }
+@keyframes formShimmer { to { background-position: -200% 0; } }
+
+.modal-footer {
+  padding: 11px 18px 13px; border-top: 1px solid var(--border); background: var(--bg-secondary);
+  display: flex; flex-direction: column; gap: 8px; flex-shrink: 0;
 }
+.modal-actions { display: flex; justify-content: flex-end; gap: 9px; }
+.btn {
+  min-width: 116px; padding: 9px 16px; border-radius: 9px; border: none; cursor: pointer;
+  font-family: 'Poppins', sans-serif; font-weight: 600; font-size: 11.5px; transition: var(--transition);
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+}
+.btn .material-icons-round { font-size: 15px; }
 .btn-primary { background: var(--accent-gradient); color: #fff; }
-.btn-primary:hover { box-shadow: 0 8px 20px var(--color-primary-glow-strong); }
-.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-/* Specifically disabled because a required file hasn't been uploaded yet
-   (vs. disabled because a save is already in progress) */
-.btn-primary.btn-disabled-upload { opacity: 0.4; cursor: not-allowed; }
+.btn-primary:hover { box-shadow: 0 7px 18px var(--color-primary-glow-strong); }
+.btn-primary:disabled { opacity: 0.48; cursor: not-allowed; box-shadow: none; }
+.btn-primary.btn-disabled-upload { opacity: 0.48; cursor: not-allowed; }
 .btn-secondary { background: var(--bg-card); color: var(--text-secondary); border: 1px solid var(--border); }
 .btn-secondary:hover { background: var(--bg-card-hover); }
 
-.form-msg { text-align: center; padding: 10px; border-radius: var(--radius-sm); font-size: 12px; margin-bottom: 14px; display: none; }
+.form-msg { width: 100%; text-align: center; padding: 8px; border-radius: 8px; font-size: 10.5px; display: none; }
 .form-msg.success { display: block; background: rgba(0,230,118,0.1); color: var(--success); border: 1px solid rgba(0,230,118,0.2); }
 .form-msg.error { display: block; background: rgba(255,82,82,0.1); color: var(--danger); border: 1px solid rgba(255,82,82,0.2); }
+
+@media (max-width: 640px) {
+  .modal-overlay { padding: 8px; align-items: flex-end; }
+  .modal-box, .modal-box.modal-wide { max-width: none; max-height: 94vh; border-radius: 16px 16px 10px 10px; }
+  .modal-header { padding: 12px 13px; }
+  .modal-body { padding: 10px; }
+  .form-context-card, .form-entry-card { padding: 10px; }
+  .form-context-grid, .form-fields-grid, .form-skeleton { grid-template-columns: 1fr; }
+  .form-fields-grid::before { display: none; }
+  .form-fields-grid .form-field.field-span-2, .form-skeleton .wide { grid-column: auto; }
+  .modal-footer { padding: 9px 11px 11px; }
+  .modal-actions .btn { flex: 1; min-width: 0; }
+}
 
 /* ===== DATA TABLE (mirrors real sheet, per-step columns only) ===== */
 /* Fills the full remaining viewport height so max rows are visible on one
@@ -683,10 +756,22 @@ body.font-large { --font-size-base: 17px; font-size: 17px; }
 .col-filter-btn.active { color: var(--color-primary); background: var(--color-primary-glow); }
 
 .col-resize-handle {
-  position: absolute; top: 0; right: 0; bottom: 0; width: 6px; cursor: col-resize;
-  z-index: 3;
+  position: absolute; top: 0; right: 0; bottom: 0; width: 12px; cursor: col-resize;
+  z-index: 4; touch-action: none; outline: none;
 }
-.col-resize-handle:hover { background: var(--color-primary-glow-strong); }
+/* The grip remains visible at all times (not only on hover) and its 12px
+   hit area is large enough to grab reliably with a mouse or touch screen. */
+.col-resize-handle::before {
+  content: ''; position: absolute; top: 18%; bottom: 18%; left: 5px; width: 2px;
+  border-radius: 2px; background: var(--color-primary); opacity: .7;
+}
+.col-resize-handle::after {
+  content: ''; position: absolute; left: 4px; top: 50%; width: 4px; height: 4px;
+  margin-top: -2px; border-radius: 50%; background: var(--surface-elevated);
+  box-shadow: 0 -5px 0 var(--surface-elevated), 0 5px 0 var(--surface-elevated);
+}
+.col-resize-handle:hover, .col-resize-handle:focus-visible { background: var(--color-primary-glow-strong); }
+.col-resize-handle:hover::before, .col-resize-handle:focus-visible::before { opacity: 1; width: 3px; left: 4px; }
 
 .col-serial { width: 46px; min-width: 46px; max-width: 46px; text-align: center !important; color: var(--text-muted); font-weight: 500; }
 
@@ -1585,7 +1670,7 @@ body.font-large {
 
 /* Every column can be resized from the Columns panel. System columns are
    always visible but expose the same exact-width controls as data columns. */
-.column-panel { width: 390px; }
+.column-panel { width: 465px; max-width: min(465px, 94vw); }
 .column-panel.open { padding: 10px; }
 .column-panel-title { margin-bottom: 3px; padding-bottom: 0; border-bottom: 0; }
 .column-panel-hint { padding-bottom: 7px; margin-bottom: 6px; border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 9.5px; line-height: 1.35; }
@@ -1601,13 +1686,15 @@ body.font-large {
 .column-config-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .column-config-system .column-config-label { cursor: default; }
 .column-width-editor { display: flex; align-items: center; gap: 3px; }
-.column-width-step, .column-width-reset {
-  width: 23px; height: 23px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+.column-width-step, .column-width-reset, .column-width-autofit {
+  height: 23px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
   border: 1px solid var(--border); border-radius: 5px; background: var(--surface-soft); color: var(--text-secondary);
   font-family: 'Poppins', sans-serif; font-size: 13px; font-weight: 600; cursor: pointer;
 }
-.column-width-step:hover, .column-width-reset:hover { border-color: var(--color-primary); color: var(--color-primary); background: var(--color-primary-glow); }
-.column-width-reset .material-icons-round { font-size: 13px; }
+.column-width-step, .column-width-reset { width: 23px; }
+.column-width-autofit { min-width: 43px; padding: 0 5px; gap: 2px; font-size: 8.5px; }
+.column-width-step:hover, .column-width-reset:hover, .column-width-autofit:hover { border-color: var(--color-primary); color: var(--color-primary); background: var(--color-primary-glow); }
+.column-width-reset .material-icons-round, .column-width-autofit .material-icons-round { font-size: 13px; }
 .column-width-input {
   width: 49px; height: 23px; padding: 0 3px; border: 1px solid var(--border); border-radius: 5px;
   background: var(--surface-elevated); color: var(--text-primary); outline: none; text-align: right;
@@ -1616,7 +1703,7 @@ body.font-large {
 .column-width-input:focus { border-color: var(--color-primary); box-shadow: 0 0 0 2px var(--color-primary-glow); }
 .column-width-unit { color: var(--text-muted); font-size: 8.5px; }
 .column-panel-footer {
-  position: sticky; bottom: -10px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
+  position: sticky; bottom: -10px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px;
   margin: 7px -3px -3px; padding: 7px 3px 3px; background: var(--surface-elevated); border-top: 1px solid var(--border);
 }
 .column-panel-footer .column-panel-reset { margin: 0; padding: 6px; display: flex; align-items: center; justify-content: center; gap: 4px; font-size: 9.5px; }
